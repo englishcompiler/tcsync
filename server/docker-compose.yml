@@ -1,0 +1,26 @@
+# CouchDB for tcsync. Listens on 127.0.0.1 only: phones reach it through the
+# tailcat tunnel, never through an open port.
+name: tcsync
+services:
+  couchdb:
+    image: couchdb:3.4.3
+    container_name: tcsync-couchdb
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5984:5984"
+    environment:
+      COUCHDB_USER: tcsync
+      COUCHDB_PASSWORD: ${COUCHDB_PASSWORD:?run server/setup.sh}
+    volumes:
+      - data:/opt/couchdb/data
+      - config:/opt/couchdb/etc/local.d
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -u tcsync:$$COUCHDB_PASSWORD http://127.0.0.1:5984/_up"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+volumes:
+  data:
+    name: tcsync-couchdb-data
+  config:
+    name: tcsync-couchdb-config
