@@ -1,14 +1,16 @@
 import { Notice, Plugin } from "obsidian";
 import { Connection } from "./connection";
-import { hookLiveSync, patchGlobalFetch, type Router } from "./hooks";
+import { installLiveSyncHook, patchGlobalFetch, type HookHandle, type Router } from "./hooks";
+import { orderBefore } from "./loadOrder";
 import { matchesHost } from "./route";
 import { TcsyncSettingTab } from "./settingsTab";
 import { StatusBar } from "./statusBar";
 import { DEFAULT_SETTINGS, type Bridge, type ConnState, type TcsyncSettings } from "./types";
 import { loadBridge } from "./wasm";
 
-const HOOK_RETRY_MS = 500;
-const HOOK_RETRY_LIMIT = 60; // 30 s
+const LIVESYNC_ID = "obsidian-livesync";
+const HOOK_RETRY_MS = 100;
+const HOOK_RETRY_LIMIT = 300; // 30 s
 
 export default class TcsyncPlugin extends Plugin {
   settings!: TcsyncSettings;
@@ -16,33 +18,80 @@ export default class TcsyncPlugin extends Plugin {
   lastDetail = "";
   private bridge: Bridge | null = null;
   private statusBar!: StatusBar;
-  private unhookLiveSync: (() => void) | null = null;
+  private liveSyncHook: HookHandle | null = null;
+
+  private settingsLoaded!: Promise<void>;
 
   async onload(): Promise<void> {
-    this.settings = { ...DEFAULT_SETTINGS, ...((await this.loadData()) as Partial<TcsyncSettings> | null) };
+    // Everything up to the first await runs before the next plugin is loaded.
+    // Self-hosted LiveSync must find our fetch patch in place when its code is
+    // evaluated (it binds a private copy of fetch), so patch first, load later.
+    this.settings = { ...DEFAULT_SETTINGS };
+    const liveSyncLoadedFirst = Boolean(this.liveSyncPlugin());
     this.statusBar = new StatusBar(this.addStatusBarItem());
     this.conn = new Connection(this.lazyBridge(), () => this.settings, (s, d) => this.onState(s, d));
-    this.addSettingTab(new TcsyncSettingTab(this.app, this));
-    this.addCommands();
+    this.settingsLoaded = this.loadData().then((d) => {
+      this.settings = { ...DEFAULT_SETTINGS, ...((d as Partial<TcsyncSettings> | null) ?? {}) };
+    });
 
     const router: Router = (req, init, original) => {
       const url = typeof req === "string" ? req : req instanceof URL ? req.href : req.url;
       if (!matchesHost(url, this.settings.host)) return null;
-      if (this.settings.verbose) console.debug("[tcsync]", init?.method ?? (req instanceof Request ? req.method : "GET"), url);
-      return this.conn.request(req, init, original);
+      return this.settingsLoaded.then(() => {
+        if (this.settings.verbose) console.debug("[tcsync]", init?.method ?? (req instanceof Request ? req.method : "GET"), url);
+        return this.conn.request(req, init, original);
+      });
     };
     this.register(patchGlobalFetch(router));
-    this.app.workspace.onLayoutReady(() => {
-      this.hookWithRetry(router, 0);
-      void this.prepare();
+    this.liveSyncHook = installLiveSyncHook(this.app, router, {
+      schedule: (fn, ms) => window.setTimeout(fn, ms),
+      intervalMs: HOOK_RETRY_MS,
+      limit: HOOK_RETRY_LIMIT,
+      onGiveUp: () => console.warn("[tcsync] Self-hosted LiveSync not found; only the global fetch is routed."),
     });
+
+    await this.settingsLoaded;
+    this.addSettingTab(new TcsyncSettingTab(this.app, this));
+    this.addCommands();
+    this.app.workspace.onLayoutReady(() => void this.prepare());
     this.registerDomEvent(document, "visibilitychange", () => {
       if (document.visibilityState === "visible") void this.conn.onResume();
     });
+    await this.ensureLoadOrder(liveSyncLoadedFirst);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private liveSyncPlugin(): any {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (this.app as any).plugins?.plugins?.[LIVESYNC_ID];
+  }
+
+  /** Makes tcsync load before LiveSync from the next start on (see loadOrder.ts). */
+  private async ensureLoadOrder(liveSyncLoadedFirst: boolean): Promise<void> {
+    const path = `${this.app.vault.configDir}/community-plugins.json`;
+    try {
+      const list = JSON.parse(await this.app.vault.adapter.read(path)) as string[];
+      const next = orderBefore(list, this.manifest.id, LIVESYNC_ID);
+      if (next) {
+        await this.app.vault.adapter.write(path, JSON.stringify(next, null, 2));
+        // Keep Obsidian's in-memory order in step, so its next save doesn't undo ours.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const mgr = (this.app as any).plugins;
+        if (mgr?.enabledPlugins instanceof Set) mgr.enabledPlugins = new Set(next.filter((id) => mgr.enabledPlugins.has(id)));
+      }
+      if (liveSyncLoadedFirst) {
+        new Notice(
+          "tcsync: please restart Obsidian once. tcsync now loads before Self-hosted LiveSync, which LiveSync's fast fetch needs to go through the tunnel.",
+          15000,
+        );
+      }
+    } catch (e) {
+      console.warn("[tcsync] could not check plugin load order", e);
+    }
   }
 
   onunload(): void {
-    this.unhookLiveSync?.();
+    this.liveSyncHook?.restore();
     this.conn?.reset();
   }
 
@@ -66,19 +115,6 @@ export default class TcsyncPlugin extends Plugin {
   private async getBridge(): Promise<Bridge> {
     if (!this.bridge) this.bridge = await loadBridge();
     return this.bridge;
-  }
-
-  private hookWithRetry(router: Router, attempt: number): void {
-    const restore = hookLiveSync(this.app, router);
-    if (restore) {
-      this.unhookLiveSync = restore;
-      return;
-    }
-    if (attempt < HOOK_RETRY_LIMIT) {
-      window.setTimeout(() => this.hookWithRetry(router, attempt + 1), HOOK_RETRY_MS);
-    } else {
-      console.warn("[tcsync] Self-hosted LiveSync not found; only the global fetch is routed.");
-    }
   }
 
   /** Loads the bridge and device key in tunnel mode, then connects if configured. */

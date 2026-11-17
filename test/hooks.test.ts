@@ -52,3 +52,40 @@ describe("patchGlobalFetch", () => {
     expect(target.fetch).toBe(orig);
   });
 });
+
+import { installLiveSyncHook } from "../src/hooks";
+
+describe("installLiveSyncHook", () => {
+  it("hooks synchronously when LiveSync is already loaded (before any timer runs)", () => {
+    const { app, api } = fakeApp();
+    const orig = api.webCompatFetch;
+    const timers: (() => void)[] = [];
+    const handle = installLiveSyncHook(app, route, { schedule: (fn) => { timers.push(fn); }, intervalMs: 100, limit: 10 });
+    expect(api.webCompatFetch).not.toBe(orig);
+    expect(timers.length).toBe(0);
+    handle.restore();
+    expect(api.webCompatFetch).toBe(orig);
+  });
+
+  it("keeps retrying until LiveSync appears, then hooks it", () => {
+    const { app } = fakeApp(false);
+    const timers: (() => void)[] = [];
+    const handle = installLiveSyncHook(app, route, { schedule: (fn) => { timers.push(fn); }, intervalMs: 100, limit: 10 });
+    expect(handle.hooked()).toBe(false);
+    const later = fakeApp();
+    app.plugins.plugins = later.app.plugins.plugins as typeof app.plugins.plugins;
+    timers.shift()!();
+    expect(handle.hooked()).toBe(true);
+    expect(later.api.webCompatFetch.name).not.toBe("webCompatFetch");
+  });
+
+  it("gives up after the retry limit and reports not hooked", () => {
+    const { app } = fakeApp(false);
+    const timers: (() => void)[] = [];
+    let gaveUp = false;
+    const handle = installLiveSyncHook(app, route, { schedule: (fn) => { timers.push(fn); }, intervalMs: 100, limit: 3, onGiveUp: () => (gaveUp = true) });
+    while (timers.length) timers.shift()!();
+    expect(handle.hooked()).toBe(false);
+    expect(gaveUp).toBe(true);
+  });
+});

@@ -25,7 +25,7 @@ tcsync is an Obsidian plugin that carries LiveSync's CouchDB traffic through a [
 - **Browsers can't send raw UDP, so in-app traffic is always relayed.** Expect about 300 ms per request and roughly 0.5 MB/s. Day-to-day note syncing is fine. Do the *first* sync of a large vault on Wi-Fi and be patient.
 - tcsync uses tailcat's free public DERP relays, which are rate-limited. You can [run your own relay](https://github.com/tailscale/tailscale/tree/main/cmd/derper#derp).
 - Tested with Self-hosted LiveSync **1.0.50** and Obsidian **1.15** on macOS and Android. iOS is untested.
-- tcsync hooks LiveSync's internal HTTP functions (with a fallback to `fetch`), so a future LiveSync release could need a tcsync update.
+- tcsync hooks LiveSync's internal HTTP functions and must load **before** LiveSync. On first start it moves itself ahead of LiveSync and asks you to restart Obsidian once. A future LiveSync release could need a tcsync update.
 
 ## Quick start
 

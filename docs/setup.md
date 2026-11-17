@@ -166,6 +166,7 @@ Do this on every device, including the server's own Obsidian if you take notes t
 3. **Browse** → search **BRAT** (*Obsidian42 - BRAT*) → *Install* → *Enable*.
 4. Open BRAT's settings → **Add beta plugin** → enter `englishcompiler/tcsync` → **Add plugin**.
 5. Back in **Community plugins**, enable **tcsync**. A `tcsync: …` item appears in the status bar. On phones, it's in the bottom toolbar's status area.
+6. If tcsync shows *"please restart Obsidian once"*, do so: fully close Obsidian (on phones, swipe it away) and reopen it. tcsync has to load before LiveSync, and it fixes the order itself; the restart applies it.
 
 BRAT keeps tcsync updated from this repository's releases.
 
@@ -247,6 +248,7 @@ The first sync of a big vault is slow, because every request goes through the re
 | Status `tcsync: unreachable` with *"server offline or this device isn't allowlisted. Device key: nodekey:…"* | The server is asleep or off, the tunnel isn't running, or this key isn't approved. The two can't be told apart from the device, by design. | On the server: `status.sh`, then `allow.sh list`. Add the key shown in the message. tcsync retries on its own (1 s, then doubling up to 60 s), immediately when you return to Obsidian, or when you press **Reconnect**. |
 | Status `tcsync: error`, *"set the server address"* | Tunnel mode without an address. | Paste the `tc…` address in **Settings → tcsync**. |
 | LiveSync says it can't reach the server, but tcsync says `up` | LiveSync's Server URI doesn't use the tunnel hostname. | Server URI must be `http://couch.tailcat:5984` (or whatever *Tunnel hostname* is set to in tcsync). |
+| LiveSync log says *"Fast Fetch could not check remote feature requirements: Failed to fetch"*, or setup ends with *"Error during vault initialisation process"* | tcsync loaded after LiveSync, so LiveSync's fast fetch bypassed the tunnel. | Restart Obsidian once (tcsync has already fixed the load order), then run the setup link again, or run LiveSync's fetch again. |
 | LiveSync shows **Config Doctor** on first start | LiveSync suggests changes after an install or update. | Accepting the suggestions is safe. *"No, and do not ask again until the next release"* is also fine. |
 | First sync takes very long | All in-app traffic is relayed (about 300 ms per request, about 0.5 MB/s). | Let it finish on Wi-Fi. Later syncs only send changes. |
 | Worked yesterday, `unreachable` today, server is on | Tunnel service stopped, or Docker isn't running. | `status.sh`; `launchctl kickstart -k gui/$(id -u)/in.englishcompiler.tcsync.serve`; start Docker. Logs: `~/Library/Logs/tcsync/serve.log`. |

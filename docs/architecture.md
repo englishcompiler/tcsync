@@ -54,7 +54,7 @@ tailcat normally upgrades a DERP-relayed connection to a direct peer-to-peer UDP
 
 ## How tcsync attaches to LiveSync
 
-Self-hosted LiveSync sends CouchDB requests through two functions on its API service: `webCompatFetch`, the browser-style fetch, and `nativeFetch`, Obsidian's `requestUrl`. tcsync wraps both once LiveSync has loaded, retrying for up to 30 s after Obsidian's layout is ready, and restores them when tcsync is disabled. It also wraps `globalThis.fetch`, so routing keeps working if a future LiveSync version renames those internals. These are internal LiveSync APIs. tcsync is tested against LiveSync 1.0.50.
+Self-hosted LiveSync sends CouchDB requests through two functions on its API service: `webCompatFetch`, the browser-style fetch, and `nativeFetch`, Obsidian's `requestUrl`. tcsync wraps both once LiveSync has loaded, retrying for up to 30 s after Obsidian's layout is ready, and restores them when tcsync is disabled. It also wraps `globalThis.fetch`, so routing keeps working if a future LiveSync version renames those internals. LiveSync's Fast Fetch (used during setup) calls a private copy of `fetch` that LiveSync binds when its code first loads. tcsync therefore patches `fetch` synchronously at the start of its `onload`, and keeps itself ahead of LiveSync in `community-plugins.json`. Obsidian loads plugins in that order, so the copy LiveSync binds is already tcsync's. If tcsync finds LiveSync already loaded, it fixes the order and asks for one restart. These are internal LiveSync APIs. tcsync is tested against LiveSync 1.0.50.
 
 ## Building blocks
 

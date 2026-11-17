@@ -43,3 +43,46 @@ export function patchGlobalFetch(route: Router, target: { fetch: typeof fetch } 
     target.fetch = original;
   };
 }
+
+export interface HookHandle {
+  hooked(): boolean;
+  restore(): void;
+}
+
+export interface HookOptions {
+  schedule: (fn: () => void, ms: number) => void;
+  intervalMs: number;
+  limit: number;
+  onGiveUp?: () => void;
+}
+
+/**
+ * Hooks LiveSync right away if it is loaded, otherwise retries every
+ * `intervalMs` up to `limit` times. Must run in tcsync's onload: LiveSync
+ * starts syncing from its own layout-ready callback, which runs before ours,
+ * and it keeps a bound copy of the original global fetch, so patching later
+ * (or patching only globalThis.fetch) misses its first requests.
+ */
+export function installLiveSyncHook(app: AnyApp, route: Router, opts: HookOptions): HookHandle {
+  let restoreFn: (() => void) | null = null;
+  let stopped = false;
+  const attempt = (n: number) => {
+    if (stopped) return;
+    restoreFn = hookLiveSync(app, route);
+    if (restoreFn) return;
+    if (n >= opts.limit) {
+      opts.onGiveUp?.();
+      return;
+    }
+    opts.schedule(() => attempt(n + 1), opts.intervalMs);
+  };
+  attempt(0);
+  return {
+    hooked: () => restoreFn !== null,
+    restore: () => {
+      stopped = true;
+      restoreFn?.();
+      restoreFn = null;
+    },
+  };
+}
