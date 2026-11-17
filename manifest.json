@@ -1,0 +1,10 @@
+{
+  "id": "tcsync",
+  "name": "tcsync",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Sync Obsidian with Self-hosted LiveSync through a tailcat tunnel to CouchDB on your own computer — no VM, no open ports.",
+  "author": "englishcompiler",
+  "authorUrl": "https://github.com/englishcompiler",
+  "isDesktopOnly": false
+}

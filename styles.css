@@ -1,0 +1,8 @@
+.tcsync-status.tcsync-up,
+.tcsync-status.tcsync-direct { color: var(--text-success); }
+.tcsync-status.tcsync-connecting { color: var(--text-muted); }
+.tcsync-status.tcsync-unreachable,
+.tcsync-status.tcsync-error { color: var(--text-error); }
+.tcsync-mono { font-family: var(--font-monospace); font-size: var(--font-ui-smaller); }
+.tcsync-key { display: block; margin-top: 4px; word-break: break-all; user-select: all; }
+.tcsync-setting-status { color: var(--text-muted); }
