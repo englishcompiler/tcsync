@@ -1,0 +1,10 @@
+{
+  "name": "tcsync-server-tools",
+  "private": true,
+  "type": "module",
+  "description": "Helper scripts for the tcsync server (setup URI generation).",
+  "license": "MIT",
+  "dependencies": {
+    "@vrtmrz/livesync-commonlib": "0.2.0"
+  }
+}
