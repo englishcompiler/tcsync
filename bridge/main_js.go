@@ -27,6 +27,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall/js"
 	"time"
@@ -206,14 +207,11 @@ func fetch(_ js.Value, args []js.Value) any {
 		}
 		u8 := js.Global().Get("Uint8Array").New(len(b))
 		js.CopyBytesToJS(u8, b)
+		// Lower-case names only: a JS Headers object built from both "Content-Type"
+		// and "content-type" would join the two values.
 		rh := map[string]any{}
 		for k := range resp.Header {
-			rh[http.CanonicalHeaderKey(k)] = resp.Header.Get(k)
-		}
-		// JS callers look headers up case-insensitively via the Headers class,
-		// but tests and simple callers use lower case; provide both forms.
-		for k, v := range rh {
-			rh[lower(k)] = v
+			rh[strings.ToLower(k)] = resp.Header.Get(k)
 		}
 		return map[string]any{"status": resp.StatusCode, "headers": rh, "body": u8}, nil
 	})
@@ -229,8 +227,6 @@ func closeTunnel(js.Value, []js.Value) any {
 	}
 	return nil
 }
-
-func lower(s string) string { return string(bytes.ToLower([]byte(s))) }
 
 func str(v js.Value, name string) string {
 	if p := v.Get(name); p.Type() == js.TypeString {

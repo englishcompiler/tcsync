@@ -1,0 +1,21 @@
+{
+  "name": "tcsync",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Obsidian plugin: Self-hosted LiveSync over a tailcat tunnel",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build:bridge": "bash bridge/build.sh",
+    "build": "npm run build:bridge && node esbuild.config.mjs && node scripts/check-size.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "esbuild": "^0.25.12",
+    "obsidian": "^1.14.4",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

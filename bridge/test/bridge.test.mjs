@@ -85,6 +85,7 @@ test("GET returns 200 and echoed path", { timeout: 60000 }, async () => {
   const r = await globalThis.tcsyncFetch({ method: "GET", url: `http://couch.tailcat:${port}/db/_changes?since=0`, headers: { accept: "text/plain" } });
   assert.equal(r.status, 200);
   assert.equal(r.headers["x-echo"], "1");
+  assert.deepEqual(Object.keys(r.headers).filter((k) => k !== k.toLowerCase()), [], "headers must be lower-case only");
   assert.equal(new TextDecoder().decode(r.body), "path=/db/_changes?since=0");
 });
 
