@@ -1,7 +1,10 @@
 import type { BridgeRequest, BridgeResponse } from "./types";
 
 const ORDINARY_TIMEOUT_MS = 30_000;
-const FEED_TIMEOUT_MS = 300_000;
+const LONGPOLL_TIMEOUT_MS = 60_000;
+const CONTINUOUS_TIMEOUT_MS = 300_000;
+/** Longest a rewritten longpoll may stay open on the server. */
+export const LONGPOLL_SERVER_TIMEOUT_MS = 25_000;
 
 /** Normalises fetch-style arguments into a bridge request. */
 export async function toBridgeRequest(req: RequestInfo | URL, init?: RequestInit): Promise<BridgeRequest> {
@@ -33,14 +36,38 @@ export function withTimeout<T>(p: Promise<T>, ms: number, msg: string): Promise<
   });
 }
 
-/** CouchDB change feeds may legitimately hold a response open; everything else must answer quickly. */
-export function requestTimeoutMs(url: string): number {
+function feedOf(url: string): { u: URL; feed: string | null } | null {
   try {
     const u = new URL(url);
-    const feed = u.searchParams.get("feed");
-    if (u.pathname.endsWith("/_changes") && (feed === "longpoll" || feed === "continuous")) return FEED_TIMEOUT_MS;
+    if (!u.pathname.endsWith("/_changes")) return null;
+    return { u, feed: u.searchParams.get("feed") };
   } catch {
-    /* fall through */
+    return null;
   }
+}
+
+/** How long a request may take before the tunnel is considered dead. */
+export function requestTimeoutMs(url: string): number {
+  const f = feedOf(url);
+  if (f?.feed === "longpoll") return LONGPOLL_TIMEOUT_MS;
+  if (f?.feed === "continuous") return CONTINUOUS_TIMEOUT_MS;
   return ORDINARY_TIMEOUT_MS;
+}
+
+/**
+ * LiveSync's live feed is a longpoll with `heartbeat`, which (per CouchDB)
+ * overrides `timeout`: the response only ends when a change happens. The
+ * bridge buffers whole responses, so heartbeats can't prove the tunnel is
+ * alive. Replace heartbeat with a short server-side timeout: CouchDB answers
+ * with an empty result within 25 s, PouchDB simply polls again, and a dead
+ * tunnel is noticed within one ordinary request timeout.
+ */
+export function rewriteFeedUrl(url: string): string {
+  const f = feedOf(url);
+  if (!f || f.feed !== "longpoll") return url;
+  const { u } = f;
+  u.searchParams.delete("heartbeat");
+  const t = Number(u.searchParams.get("timeout"));
+  if (!t || t > LONGPOLL_SERVER_TIMEOUT_MS) u.searchParams.set("timeout", String(LONGPOLL_SERVER_TIMEOUT_MS));
+  return u.href;
 }

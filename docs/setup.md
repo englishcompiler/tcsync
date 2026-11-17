@@ -2,13 +2,13 @@
 
 This guide starts from nothing. By the end you will have:
 
-- CouchDB running on one computer (the **server**). It is reachable only from that computer, plus devices you approve.
+- CouchDB running on one machine (the **server**): your everyday computer or an always-on box such as a Raspberry Pi, a NAS or a VM. It is reachable only from that machine, plus devices you approve, as many as you like.
 - A tailcat tunnel on the server that starts automatically.
 - Obsidian on every device syncing through **Self-hosted LiveSync** with **end-to-end encryption**, using **tcsync** to reach the server.
 
 | Term | Meaning |
 |---|---|
-| **Server** | The computer that runs CouchDB. It must be awake for devices to sync. |
+| **Server** | The machine that runs CouchDB: any macOS or Linux machine with Docker. It must be awake for devices to sync. |
 | **Device** | Any Obsidian install that syncs: phone, tablet, laptop, and the server's own Obsidian. |
 | **Server address** | A long `tc…` string. Devices use it to find the server through the tunnel. Treat it like a password. |
 | **Device key** | A `nodekey:…` string that tcsync generates on each device. The server admits only keys on its allowlist. |

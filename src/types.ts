@@ -18,6 +18,8 @@ export interface Bridge {
   close(): void;
   publicKey(privateKey: string): string;
   newKey(): { privateKey: string; publicKey: string };
+  /** Opens and closes a TCP connection to `port` through the tunnel; rejects if the server doesn't answer. */
+  ping(timeoutMs: number, port: number): Promise<void>;
 }
 
 export type Mode = "tunnel" | "direct";

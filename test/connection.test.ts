@@ -14,6 +14,7 @@ function fakeBridge(over: Partial<Bridge> = {}): Bridge & { inits: number } {
     close() {},
     publicKey() { return PUB; },
     newKey() { return { privateKey: PRIV, publicKey: PUB }; },
+    async ping() {},
     ...over,
   };
   return b;
@@ -116,5 +117,108 @@ describe("Connection", () => {
     expect(await res.text()).toBe("direct:http://127.0.0.1:5984/db/x?y=1");
     expect(b.inits).toBe(0);
     expect(c.state).toBe("direct");
+  });
+
+  it("ignores a stale connect attempt that fails after reset (does not mark the new tunnel unreachable)", async () => {
+    let rejectA!: (e: Error) => void; let n = 0;
+    const b = fakeBridge({ init: () => (++n === 1 ? new Promise<void>((_, rej) => (rejectA = rej)) : Promise.resolve()) });
+    const c = mk(b);
+    const a = c.ensureUp().catch((e) => e);
+    c.reset();
+    const second = c.ensureUp();
+    await new Promise((r) => setTimeout(r, 0)); // inits are queued; let A's start
+    rejectA(new Error("timeout"));
+    await a;
+    await second;
+    expect(c.state).toBe("up");
+    expect(c.nextAttemptInMs()).toBe(0);
+    expect(n).toBe(2);
+  });
+
+  it("closes a stale attempt that succeeds after switching to direct mode, and stays direct", async () => {
+    let resolveA!: () => void; let closed = 0;
+    const s = settings();
+    const b = fakeBridge({ init: () => new Promise<void>((res) => (resolveA = res)), close: () => { closed++; } });
+    const c = mk(b, s);
+    const a = c.ensureUp().catch(() => {});
+    s.mode = "direct";
+    c.reset();
+    await c.ensureUp();
+    const closedBefore = closed;
+    await new Promise((r) => setTimeout(r, 0)); // let A's init start
+    resolveA();
+    await a;
+    expect(c.state).toBe("direct");
+    expect(closed).toBe(closedBefore + 1);
+  });
+
+  it("counts concurrent request failures as one failure (first backoff stays 1 s)", async () => {
+    vi.useFakeTimers();
+    const b = fakeBridge({ fetch: () => new Promise(() => {}) });
+    const c = mk(b);
+    await c.ensureUp();
+    const ps = [1, 2, 3, 4].map(() => c.request("http://couch.tailcat:5984/db/doc").catch((e) => e));
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.all(ps);
+    expect(c.nextAttemptInMs()).toBe(1000);
+  });
+
+  it("an abandoned (aborted) request that later times out does not mark the tunnel unreachable", async () => {
+    vi.useFakeTimers();
+    const b = fakeBridge({ fetch: () => new Promise(() => {}) });
+    const c = mk(b);
+    await c.ensureUp();
+    const ac = new AbortController();
+    const p = c.request("http://couch.tailcat:5984/db/_changes?feed=longpoll", { signal: ac.signal }).catch((e) => e);
+    ac.abort();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await p;
+    expect(c.state).toBe("up");
+    expect(c.nextAttemptInMs()).toBe(0);
+  });
+
+  it("delivers the response of a request aborted mid-flight (as fetch does once headers arrived)", async () => {
+    let resolve!: (v: { status: number; headers: Record<string, string>; body: Uint8Array }) => void;
+    const b = fakeBridge({ fetch: () => new Promise((r) => (resolve = r)) });
+    const c = mk(b);
+    await c.ensureUp();
+    const ac = new AbortController();
+    const p = c.request("http://couch.tailcat:5984/db/_changes?feed=longpoll", { signal: ac.signal });
+    await new Promise((r) => setTimeout(r, 0));
+    ac.abort();
+    resolve({ status: 200, headers: {}, body: new TextEncoder().encode('{"results":[]}') });
+    expect((await p).status).toBe(200);
+  });
+
+  it("rejects immediately when the signal is already aborted", async () => {
+    let fetched = 0;
+    const b = fakeBridge({ async fetch() { fetched++; return { status: 200, headers: {}, body: new Uint8Array() }; } });
+    const c = mk(b);
+    const ac = new AbortController(); ac.abort();
+    await expect(c.request("http://couch.tailcat:5984/db", { signal: ac.signal })).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetched).toBe(0);
+  });
+
+  it("sends longpoll feeds with heartbeat replaced by a 25 s timeout", async () => {
+    const seen: string[] = [];
+    const b = fakeBridge({ async fetch(r) { seen.push(r.url); return { status: 200, headers: {}, body: new TextEncoder().encode("{}") }; } });
+    await mk(b).request("http://couch.tailcat:5984/db/_changes?feed=longpoll&heartbeat=30000&since=1");
+    expect(seen[0]).toContain("timeout=25000");
+    expect(seen[0]).not.toContain("heartbeat");
+  });
+
+  it("on resume after a long background, pings an 'up' tunnel and reconnects when the ping fails", async () => {
+    let inits = 0; let pingOk = false;
+    const b = fakeBridge({ async init() { inits++; }, async ping() { if (!pingOk) throw new Error("dead"); } });
+    const c = mk(b);
+    await c.ensureUp();
+    await c.onResume(10_000);
+    expect(inits).toBe(1); // short absence: no check
+    await c.onResume(60_000);
+    expect(inits).toBe(2); // ping failed -> reconnected
+    pingOk = true;
+    await c.onResume(60_000);
+    expect(inits).toBe(2); // ping ok -> keep tunnel
+    expect(c.state).toBe("up");
   });
 });

@@ -11,7 +11,7 @@ describe("orderBefore", () => {
   it("returns null when the other plugin is not enabled", () => {
     expect(orderBefore(["a", "tcsync"], "tcsync", "obsidian-livesync")).toBeNull();
   });
-  it("returns null when self is not in the list", () => {
-    expect(orderBefore(["obsidian-livesync"], "tcsync", "obsidian-livesync")).toBeNull();
+  it("inserts self ahead of the other plugin when self is not in the list yet (first enable)", () => {
+    expect(orderBefore(["a", "obsidian-livesync"], "tcsync", "obsidian-livesync")).toEqual(["a", "tcsync", "obsidian-livesync"]);
   });
 });

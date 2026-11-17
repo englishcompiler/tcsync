@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { toBridgeRequest, toResponse, withTimeout, requestTimeoutMs } from "../src/fetchAdapter";
+import { toBridgeRequest, toResponse, withTimeout, requestTimeoutMs, rewriteFeedUrl } from "../src/fetchAdapter";
 
 describe("toBridgeRequest", () => {
   it("carries method, lower-cased headers and a string body", async () => {
@@ -59,8 +59,30 @@ describe("requestTimeoutMs", () => {
   it("is 30 s for ordinary requests", () => {
     expect(requestTimeoutMs("http://couch.tailcat:5984/db/doc")).toBe(30000);
   });
-  it("is 5 min for longpoll and continuous change feeds", () => {
-    expect(requestTimeoutMs("http://couch.tailcat:5984/db/_changes?feed=longpoll&since=3")).toBe(300000);
+  it("is 60 s for longpoll feeds (they are rewritten to answer within 25 s)", () => {
+    expect(requestTimeoutMs("http://couch.tailcat:5984/db/_changes?feed=longpoll&since=3")).toBe(60000);
+  });
+  it("is 5 min for continuous feeds", () => {
     expect(requestTimeoutMs("http://couch.tailcat:5984/db/_changes?style=all_docs&feed=continuous")).toBe(300000);
+  });
+});
+
+describe("rewriteFeedUrl", () => {
+  it("replaces heartbeat with a 25 s timeout on longpoll change feeds", () => {
+    const u = new URL(rewriteFeedUrl("http://couch.tailcat:5984/db/_changes?style=all_docs&feed=longpoll&heartbeat=30000&since=5"));
+    expect(u.searchParams.get("heartbeat")).toBeNull();
+    expect(u.searchParams.get("timeout")).toBe("25000");
+    expect(u.searchParams.get("since")).toBe("5");
+    expect(u.searchParams.get("feed")).toBe("longpoll");
+  });
+  it("caps a longer timeout at 25 s and keeps a shorter one", () => {
+    expect(new URL(rewriteFeedUrl("http://h:1/db/_changes?feed=longpoll&timeout=60000")).searchParams.get("timeout")).toBe("25000");
+    expect(new URL(rewriteFeedUrl("http://h:1/db/_changes?feed=longpoll&timeout=10000")).searchParams.get("timeout")).toBe("10000");
+  });
+  it("leaves other URLs untouched", () => {
+    const u = "http://couch.tailcat:5984/db/doc?rev=1";
+    expect(rewriteFeedUrl(u)).toBe(u);
+    const n = "http://couch.tailcat:5984/db/_changes?since=0&limit=100";
+    expect(rewriteFeedUrl(n)).toBe(n);
   });
 });

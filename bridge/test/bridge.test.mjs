@@ -32,7 +32,7 @@ function startServe(args) {
   });
 }
 
-let addr, deniedAddr;
+let addr, deniedAddr, instance;
 before(async () => {
   echo = http.createServer((req, res) => {
     const chunks = [];
@@ -52,7 +52,7 @@ before(async () => {
   require(path.join(here, "../dist/wasm_exec.js"));
   const go = new globalThis.Go();
   const ready = new Promise((r) => (globalThis.onTcsyncReady = r));
-  const { instance } = await WebAssembly.instantiate(fs.readFileSync(path.join(here, "../dist/tcsync.wasm")), go.importObject);
+  ({ instance } = await WebAssembly.instantiate(fs.readFileSync(path.join(here, "../dist/tcsync.wasm")), go.importObject));
   go.run(instance);
   await ready;
 });
@@ -96,4 +96,23 @@ test("5 MB PUT body round-trips byte-identical (sha256 equal)", { timeout: 60000
   const get = await globalThis.tcsyncFetch({ method: "GET", url: `http://couch.tailcat:${port}/blob`, headers: {} });
   const sha = (b) => crypto.createHash("sha256").update(b).digest("hex");
   assert.equal(sha(Buffer.from(get.body)), sha(big));
+});
+
+test("WASM memory stays bounded across many large uploads (request bodies are released)", { timeout: 600000 }, async () => {
+  await globalThis.tcsyncInit({ addr, privateKey: globalThis.tcsyncNewKey().privateKey });
+  const body = new Uint8Array(crypto.randomBytes(2 * 1024 * 1024));
+  const put = () => globalThis.tcsyncFetch({ method: "PUT", url: `http://couch.tailcat:${port}/mem`, headers: {}, body });
+  for (let i = 0; i < 3; i++) await put(); // warm up allocator
+  const before = instance.exports.mem.buffer.byteLength;
+  for (let i = 0; i < 12; i++) await put();
+  const grownMB = (instance.exports.mem.buffer.byteLength - before) / 1048576;
+  assert.ok(grownMB < 12, `WASM memory grew ${grownMB.toFixed(1)} MB over 24 MB of uploads`);
+});
+
+test("ping resolves on a live tunnel and rejects when the server is gone", { timeout: 60000 }, async () => {
+  await globalThis.tcsyncInit({ addr, privateKey: globalThis.tcsyncNewKey().privateKey });
+  await globalThis.tcsyncPing(10000, port);
+  for (const s of servers) s.kill("SIGKILL");
+  await new Promise((r) => setTimeout(r, 3000));
+  await assert.rejects(globalThis.tcsyncPing(5000, port));
 });

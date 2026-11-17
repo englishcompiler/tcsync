@@ -3,4 +3,4 @@
 # run node under a different argv0 so the bridge behaves as it does in Obsidian.
 set -euo pipefail
 cd "$(dirname "$0")"
-exec -a tcsync-test node --test --test-concurrency=1 bridge.test.mjs
+exec -a tcsync-test node --test --test-concurrency=1 ${TEST_PATTERN:+--test-name-pattern="$TEST_PATTERN"} bridge.test.mjs

@@ -1,8 +1,9 @@
 import { Notice, Plugin } from "obsidian";
 import { Connection } from "./connection";
-import { installLiveSyncHook, patchGlobalFetch, type HookHandle, type Router } from "./hooks";
+import { installLiveSyncHook, patchGlobalFetch, type HookHandle } from "./hooks";
 import { orderBefore } from "./loadOrder";
 import { matchesHost } from "./route";
+import { createRouter } from "./router";
 import { TcsyncSettingTab } from "./settingsTab";
 import { StatusBar } from "./statusBar";
 import { DEFAULT_SETTINGS, type Bridge, type ConnState, type TcsyncSettings } from "./types";
@@ -21,6 +22,7 @@ export default class TcsyncPlugin extends Plugin {
   private liveSyncHook: HookHandle | null = null;
 
   private settingsLoaded!: Promise<void>;
+  private unloaded = false;
 
   async onload(): Promise<void> {
     // Everything up to the first await runs before the next plugin is loaded.
@@ -34,14 +36,13 @@ export default class TcsyncPlugin extends Plugin {
       this.settings = { ...DEFAULT_SETTINGS, ...((d as Partial<TcsyncSettings> | null) ?? {}) };
     });
 
-    const router: Router = (req, init, original) => {
-      const url = typeof req === "string" ? req : req instanceof URL ? req.href : req.url;
-      if (!matchesHost(url, this.settings.host)) return null;
-      return this.settingsLoaded.then(() => {
-        if (this.settings.verbose) console.debug("[tcsync]", init?.method ?? (req instanceof Request ? req.method : "GET"), url);
-        return this.conn.request(req, init, original);
-      });
-    };
+    const router = createRouter({
+      host: () => this.settings.host,
+      unloaded: () => this.unloaded,
+      ready: this.settingsLoaded,
+      verbose: () => this.settings.verbose,
+      request: (req, init, original) => this.conn.request(req, init, original),
+    });
     this.register(patchGlobalFetch(router));
     this.liveSyncHook = installLiveSyncHook(this.app, router, {
       schedule: (fn, ms) => window.setTimeout(fn, ms),
@@ -54,8 +55,10 @@ export default class TcsyncPlugin extends Plugin {
     this.addSettingTab(new TcsyncSettingTab(this.app, this));
     this.addCommands();
     this.app.workspace.onLayoutReady(() => void this.prepare());
+    let hiddenAt = 0;
     this.registerDomEvent(document, "visibilitychange", () => {
-      if (document.visibilityState === "visible") void this.conn.onResume();
+      if (document.visibilityState === "hidden") hiddenAt = Date.now();
+      else void this.conn.onResume(hiddenAt ? Date.now() - hiddenAt : 0);
     });
     await this.ensureLoadOrder(liveSyncLoadedFirst);
   }
@@ -66,31 +69,9 @@ export default class TcsyncPlugin extends Plugin {
     return (this.app as any).plugins?.plugins?.[LIVESYNC_ID];
   }
 
-  /** Makes tcsync load before LiveSync from the next start on (see loadOrder.ts). */
-  private async ensureLoadOrder(liveSyncLoadedFirst: boolean): Promise<void> {
-    const path = `${this.app.vault.configDir}/community-plugins.json`;
-    try {
-      const list = JSON.parse(await this.app.vault.adapter.read(path)) as string[];
-      const next = orderBefore(list, this.manifest.id, LIVESYNC_ID);
-      if (next) {
-        await this.app.vault.adapter.write(path, JSON.stringify(next, null, 2));
-        // Keep Obsidian's in-memory order in step, so its next save doesn't undo ours.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const mgr = (this.app as any).plugins;
-        if (mgr?.enabledPlugins instanceof Set) mgr.enabledPlugins = new Set(next.filter((id) => mgr.enabledPlugins.has(id)));
-      }
-      if (liveSyncLoadedFirst) {
-        new Notice(
-          "tcsync: please restart Obsidian once. tcsync now loads before Self-hosted LiveSync, which LiveSync's fast fetch needs to go through the tunnel.",
-          15000,
-        );
-      }
-    } catch (e) {
-      console.warn("[tcsync] could not check plugin load order", e);
-    }
-  }
-
   onunload(): void {
+    // LiveSync keeps the fetch wrapper it bound at load time; make it pass through.
+    this.unloaded = true;
     this.liveSyncHook?.restore();
     this.conn?.reset();
   }
@@ -109,6 +90,7 @@ export default class TcsyncPlugin extends Plugin {
         if (!this.bridge) throw new Error("bridge not loaded");
         return this.bridge.newKey();
       },
+      ping: async (ms, port) => (await this.getBridge()).ping(ms, port),
     };
   }
 
@@ -129,6 +111,39 @@ export default class TcsyncPlugin extends Plugin {
       }
     } catch (e) {
       this.onState("error", e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
+   * Makes tcsync load before LiveSync from the next start on (see loadOrder.ts).
+   * Obsidian's in-memory set of enabled plugins is the source of truth: the
+   * file on disk is written later by a debounced save (and may not list
+   * LiveSync yet), and that save writes the set in its current order.
+   */
+  private async ensureLoadOrder(liveSyncLoadedFirst: boolean): Promise<void> {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mgr = (this.app as any).plugins;
+      const enabled: Set<string> | undefined = mgr?.enabledPlugins;
+      if (enabled instanceof Set) {
+        const next = orderBefore([...enabled], this.manifest.id, LIVESYNC_ID);
+        if (next) {
+          // On first enable tcsync isn't in the set yet; Obsidian adds it after
+          // onload resolves, which is then a no-op.
+          enabled.clear();
+          for (const id of next) enabled.add(id);
+          const path = `${this.app.vault.configDir}/community-plugins.json`;
+          await this.app.vault.adapter.write(path, JSON.stringify(next, null, 2));
+        }
+      }
+      if (liveSyncLoadedFirst) {
+        new Notice(
+          "tcsync: please restart Obsidian once. tcsync now loads before Self-hosted LiveSync, which LiveSync's fast fetch needs to go through the tunnel.",
+          15000,
+        );
+      }
+    } catch (e) {
+      console.warn("[tcsync] could not check plugin load order", e);
     }
   }
 

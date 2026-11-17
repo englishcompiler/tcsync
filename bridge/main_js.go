@@ -12,6 +12,7 @@
 //	tcsyncPublicKey(privateKey) -> "nodekey:…"
 //	tcsyncInit({addr, privateKey, dialTimeoutMs?}) -> Promise<void>
 //	tcsyncFetch({method, url, headers, body?}) -> Promise<{status, headers, body}>
+//	tcsyncPing(timeoutMs, port) -> Promise<void>  (rejects if the server doesn't answer)
 //	tcsyncClose()
 //
 // The URL host passed to tcsyncFetch is ignored; its port selects the TCP
@@ -52,6 +53,7 @@ func main() {
 	g.Set("tcsyncInit", js.FuncOf(initTunnel))
 	g.Set("tcsyncFetch", js.FuncOf(fetch))
 	g.Set("tcsyncClose", js.FuncOf(closeTunnel))
+	g.Set("tcsyncPing", js.FuncOf(ping))
 	if f := g.Get("onTcsyncReady"); f.Type() == js.TypeFunction {
 		f.Invoke()
 	}
@@ -217,6 +219,36 @@ func fetch(_ js.Value, args []js.Value) any {
 	})
 }
 
+// ping checks that the server still answers by opening (and closing) a TCP
+// connection to `port` through the tunnel. tailcat's Client.Ping can't be used
+// for this: after the first successful handshake it returns immediately.
+func ping(_ js.Value, args []js.Value) any {
+	timeout := 10 * time.Second
+	if len(args) >= 1 && args[0].Type() == js.TypeNumber && args[0].Int() > 0 {
+		timeout = time.Duration(args[0].Int()) * time.Millisecond
+	}
+	port := 5984
+	if len(args) >= 2 && args[1].Type() == js.TypeNumber && args[1].Int() > 0 {
+		port = args[1].Int()
+	}
+	return promise(func() (any, error) {
+		mu.Lock()
+		c := client
+		mu.Unlock()
+		if c == nil {
+			return nil, errors.New("tunnel not initialised")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		conn, err := c.DialTCPPort(ctx, uint16(port))
+		if err != nil {
+			return nil, fmt.Errorf("server did not answer: %w", err)
+		}
+		conn.Close()
+		return js.Undefined(), nil
+	})
+}
+
 func closeTunnel(js.Value, []js.Value) any {
 	mu.Lock()
 	c := client
@@ -240,7 +272,11 @@ func rejected(err error) js.Value {
 }
 
 func promise(f func() (any, error)) js.Value {
-	return js.Global().Get("Promise").New(js.FuncOf(func(_ js.Value, a []js.Value) any {
+	// The executor runs synchronously inside the Promise constructor, so it can
+	// be released right away. Unreleased js.Funcs stay in Go's function table
+	// forever, together with everything their closures captured (for fetch,
+	// the whole request body).
+	exec := js.FuncOf(func(_ js.Value, a []js.Value) any {
 		resolve, reject := a[0], a[1]
 		go func() {
 			if r, err := f(); err != nil {
@@ -250,5 +286,7 @@ func promise(f func() (any, error)) js.Value {
 			}
 		}()
 		return nil
-	}))
+	})
+	defer exec.Release()
+	return js.Global().Get("Promise").New(exec)
 }

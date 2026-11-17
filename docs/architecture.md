@@ -1,5 +1,31 @@
 # How tcsync works
 
+## One sync request, step by step
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant LS as LiveSync (phone)
+  participant TC as tcsync
+  participant GO as Go WASM bridge<br/>(tailcat client)
+  participant DERP as DERP relay
+  participant SV as tailcat serve<br/>(your computer)
+  participant DB as CouchDB
+
+  LS->>TC: fetch("http://couch.tailcat:5984/obsidian/_changes?…")
+  Note over TC: hostname matches → route it<br/>(other URLs pass through untouched)
+  TC->>GO: tcsyncFetch({method, url, headers, body})
+  GO->>DERP: WireGuard-encrypted TCP segments over a WebSocket
+  DERP->>SV: forwards ciphertext (can't read it)
+  Note over SV: device key on the allowlist?<br/>no → dropped silently
+  SV->>DB: HTTP to 127.0.0.1:5984 (Basic auth from LiveSync)
+  DB-->>SV: JSON (documents are E2EE ciphertext)
+  SV-->>DERP: encrypted reply
+  DERP-->>GO: encrypted reply
+  GO-->>TC: {status, headers, body}
+  TC-->>LS: Response
+```
+
 ## Request path
 
 ```
@@ -8,8 +34,10 @@ Device (tunnel mode)
         │  tcsync replaced LiveSync's webCompatFetch/nativeFetch (and globalThis.fetch as a fallback);
         │  only URLs whose hostname is the tunnel hostname are taken, everything else passes through.
         ▼
-  tcsync Connection ─ single-flight connect, backoff 1 s → 60 s, 30 s request timeout
-        │            (5 min for CouchDB change feeds, which legitimately hold a response open)
+  tcsync Connection ─ single-flight connect, backoff 1 s → 60 s, 30 s request timeout,
+        │            honours AbortSignal; LiveSync's live feed (longpoll + heartbeat) is rewritten
+        │            to timeout=25000 so it answers within 25 s even when nothing changed
+        │            (60 s limit), keeping a dead tunnel detectable within about 30 s
         ▼
   Go WebAssembly bridge (embedded in main.js, gzip + base64, about 8 MB)
         │  net/http client whose dialer is tailcat.Client.DialTCPPort; connections are kept alive and reused
@@ -54,7 +82,9 @@ tailcat normally upgrades a DERP-relayed connection to a direct peer-to-peer UDP
 
 ## How tcsync attaches to LiveSync
 
-Self-hosted LiveSync sends CouchDB requests through two functions on its API service: `webCompatFetch`, the browser-style fetch, and `nativeFetch`, Obsidian's `requestUrl`. tcsync wraps both once LiveSync has loaded, retrying for up to 30 s after Obsidian's layout is ready, and restores them when tcsync is disabled. It also wraps `globalThis.fetch`, so routing keeps working if a future LiveSync version renames those internals. LiveSync's Fast Fetch (used during setup) calls a private copy of `fetch` that LiveSync binds when its code first loads. tcsync therefore patches `fetch` synchronously at the start of its `onload`, and keeps itself ahead of LiveSync in `community-plugins.json`. Obsidian loads plugins in that order, so the copy LiveSync binds is already tcsync's. If tcsync finds LiveSync already loaded, it fixes the order and asks for one restart. These are internal LiveSync APIs. tcsync is tested against LiveSync 1.0.50.
+Self-hosted LiveSync sends CouchDB requests through two functions on its API service: `webCompatFetch`, the browser-style fetch, and `nativeFetch`, Obsidian's `requestUrl`. tcsync wraps both during its own `onload` (retrying every 100 ms for up to 30 s if LiveSync isn't loaded yet) and restores them when tcsync is disabled. After unload, any wrapper LiveSync still holds passes requests straight through. It also wraps `globalThis.fetch`, so routing keeps working if a future LiveSync version renames those internals. LiveSync's Fast Fetch (used during setup) calls a private copy of `fetch` that LiveSync binds when its code first loads. tcsync therefore patches `fetch` synchronously at the start of its `onload`, and keeps itself ahead of LiveSync in `community-plugins.json`. Obsidian loads plugins in that order, so the copy LiveSync binds is already tcsync's. If tcsync finds LiveSync already loaded (for example on first enable), it fixes the order, including in Obsidian's in-memory list so Obsidian's own save keeps it, and asks for one restart.
+
+When Obsidian comes back to the foreground after more than 30 s in the background, tcsync pings the server over the existing tunnel and reconnects if the ping fails. The relay connection often dies while a phone app is frozen. These are internal LiveSync APIs. tcsync is tested against LiveSync 1.0.50.
 
 ## Building blocks
 

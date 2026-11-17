@@ -20,6 +20,7 @@ function adapt(): Bridge {
     close: () => g.tcsyncClose(),
     publicKey: (p) => g.tcsyncPublicKey(p) as string,
     newKey: () => g.tcsyncNewKey() as { privateKey: string; publicKey: string },
+    ping: (timeoutMs, port) => g.tcsyncPing(timeoutMs, port) as Promise<void>,
   };
 }
 

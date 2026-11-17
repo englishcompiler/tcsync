@@ -1,6 +1,7 @@
 /**
- * Returns `list` with `self` moved directly ahead of `other`, or null when no
- * change is needed (self already first, or either plugin absent).
+ * Returns `list` with `self` moved (or, on first enable, inserted) directly
+ * ahead of `other`, or null when no change is needed (self already ahead, or
+ * `other` not enabled).
  *
  * Obsidian loads community plugins in the order of community-plugins.json.
  * tcsync must load before Self-hosted LiveSync: LiveSync binds a private copy
@@ -10,7 +11,7 @@
 export function orderBefore(list: readonly string[], self: string, other: string): string[] | null {
   const si = list.indexOf(self);
   const oi = list.indexOf(other);
-  if (si < 0 || oi < 0 || si < oi) return null;
+  if (oi < 0 || (si >= 0 && si < oi)) return null;
   const rest = list.filter((id) => id !== self);
   rest.splice(rest.indexOf(other), 0, self);
   return rest;
