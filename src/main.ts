@@ -274,11 +274,11 @@ export default class TcsyncPlugin extends Plugin {
     this.onState("idle");
   }
 
-  /** "Add a device": mints a device key and shows the pairing QR code. */
-  async addDevice(name: string): Promise<void> {
+  /** "Add a device": mints a device key and shows the pairing QR code. Returns the pairing link. */
+  async addDevice(name: string): Promise<string | null> {
     if (!this.hub || !this.settings.hub) {
       new Notice("tcsync: the hub isn't running yet.");
-      return;
+      return null;
     }
     const { privateKey, record } = await this.hub.addDevice(name);
     const h = this.settings.hub;
@@ -290,6 +290,7 @@ export default class TcsyncPlugin extends Plugin {
       expiresAt,
       isPaired: () => this.settings.hub?.devices.find((d) => d.publicKey === record.publicKey)?.state === "paired",
     }).open();
+    return link;
   }
 
   async removeDevice(publicKey: string, name: string): Promise<void> {
