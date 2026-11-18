@@ -63,16 +63,28 @@ export const SYNC_MODE_LIVE: Record<string, unknown> = {
   batchSave: false,
 };
 
-export function liveSyncSettings(secrets: LiveSyncSecrets, currentIgnore: string): Record<string, unknown> {
-  const ignore = currentIgnore.includes(TCSYNC_IGNORE_PATTERN)
-    ? currentIgnore
-    : [currentIgnore, TCSYNC_IGNORE_PATTERN].filter((s) => s.trim()).join(", ");
+/** Backups tcsync makes before a device's first sync stay on that device. */
+export const BACKUP_IGNORE_REGEX = "^tcsync-backup-\\d{8}-\\d{6}\\.zip$";
+/** LiveSync separates multiple RegExps in one setting with this. */
+const REGEX_SEPARATOR = "|[]|";
+
+export function liveSyncSettings(
+  secrets: LiveSyncSecrets,
+  current: { syncInternalFilesIgnorePatterns?: unknown; syncIgnoreRegEx?: unknown },
+): Record<string, unknown> {
+  const hidden = String(current.syncInternalFilesIgnorePatterns ?? "");
+  const ignoreHidden = hidden.includes(TCSYNC_IGNORE_PATTERN)
+    ? hidden
+    : [hidden, TCSYNC_IGNORE_PATTERN].filter((x) => x.trim()).join(", ");
+  const files = String(current.syncIgnoreRegEx ?? "").split(REGEX_SEPARATOR).filter((x) => x.trim());
+  if (!files.includes(BACKUP_IGNORE_REGEX)) files.push(BACKUP_IGNORE_REGEX);
   return {
     ...LIVESYNC_SETTINGS_FOR_TCSYNC,
     passphrase: secrets.e2ee,
     idDerivationVersion: 1,
     idDerivationKey: secrets.idKey,
-    syncInternalFilesIgnorePatterns: ignore,
+    syncInternalFilesIgnorePatterns: ignoreHidden,
+    syncIgnoreRegEx: files.join(REGEX_SEPARATOR),
   };
 }
 
@@ -91,8 +103,7 @@ export async function configureLiveSync(
   if (typeof ls?.setting?.applyPartial !== "function" || typeof ls.setting.currentSettings !== "function"
     || typeof ls.rebuilder?.scheduleFetch !== "function" || typeof ls.rebuilder.scheduleRebuild !== "function"
     || typeof ls.restart !== "function") return "fallback";
-  const ignore = String(ls.setting.currentSettings().syncInternalFilesIgnorePatterns ?? "");
-  await ls.setting.applyPartial(liveSyncSettings(o.secrets, ignore), true);
+  await ls.setting.applyPartial(liveSyncSettings(o.secrets, ls.setting.currentSettings()), true);
   if (o.role === "device") {
     await ls.rebuilder.scheduleFetch();
     return "scheduled";
@@ -142,6 +153,8 @@ const RULES: Rule[] = [
     click: "I Understand, Overwrite Server",
   },
   { title: /^All optional features are disabled/, roles: ["hub", "device"], click: "OK" },
+  // The remote has no sync parameters yet; tcsync's settings are identical on every device.
+  { title: /^No Synchronisation Settings Found$/, roles: ["hub", "device"], click: "Use this device's settings" },
   { title: /^Data retrieval scheduled$/, roles: ["device"], click: "Compare time and take newer" },
   { title: /^Conflict & Deletion Options$/, roles: ["device"], click: "Keep local files even if deleted on remote" },
   { title: /^Resume scheduled fetch\?$/, roles: ["device"], click: "Continue with these choices" },

@@ -49,7 +49,7 @@ export async function launch(v, port) {
 }
 
 export function killAll(root) {
-  try { execFileSync("pkill", ["-f", `--user-data-dir=${root}`]); } catch { /* none */ }
+  try { execFileSync("pkill", ["-f", `user-data-dir=${root}`]); } catch { /* none */ }
 }
 
 export class Page {

@@ -63,9 +63,16 @@ describe("configureLiveSync", () => {
     expect(ls.calls).toEqual([]);
   });
   it("liveSyncSettings never enables periodic/live sync before initialisation", () => {
-    const s = liveSyncSettings(secrets, "");
+    const s = liveSyncSettings(secrets, {});
     expect(s.liveSync).toBeUndefined();
     expect(s.periodicReplication).toBeUndefined();
+  });
+  it("keeps backup zips local: adds them to LiveSync's ignore list, preserving existing patterns", () => {
+    expect(liveSyncSettings(secrets, {}).syncIgnoreRegEx).toBe("^tcsync-backup-\\d{8}-\\d{6}\\.zip$");
+    expect(liveSyncSettings(secrets, { syncIgnoreRegEx: "\\.tmp$" }).syncIgnoreRegEx).toBe("\\.tmp$|[]|^tcsync-backup-\\d{8}-\\d{6}\\.zip$");
+    const again = liveSyncSettings(secrets, { syncIgnoreRegEx: liveSyncSettings(secrets, {}).syncIgnoreRegEx });
+    expect(again.syncIgnoreRegEx).toBe("^tcsync-backup-\\d{8}-\\d{6}\\.zip$");
+    expect(new RegExp("^tcsync-backup-\\d{8}-\\d{6}\\.zip$").test("tcsync-backup-20261118-140903.zip")).toBe(true);
   });
   it("SYNC_MODE_LIVE is LiveSync mode", () => {
     expect(SYNC_MODE_LIVE).toMatchObject({ liveSync: true, periodicReplication: false, syncOnStart: true });
@@ -117,6 +124,13 @@ describe("answerModal (autopilot)", () => {
     const b = modal("Resume scheduled fetch?", [], ["Continue with these choices", "Choose again", "Cancel"]);
     expect(answerModal(b, "device")).toBe(true);
     expect(b.log).toEqual(["click:Continue with these choices"]);
+  });
+  it("answers 'No Synchronisation Settings Found' with this device's settings (both roles)", () => {
+    for (const role of ["hub", "device"] as const) {
+      const m = modal("No Synchronisation Settings Found", [], ["Use this device's settings", "Cancel"]);
+      expect(answerModal(m, role)).toBe(true);
+      expect(m.log).toEqual(["click:Use this device's settings"]);
+    }
   });
   it("leaves unknown dialogs to the person", () => {
     const m = modal("Something new", [], ["Yes", "No"]);
