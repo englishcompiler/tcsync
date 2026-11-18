@@ -116,3 +116,66 @@ test("ping resolves on a live tunnel and rejects when the server is gone", { tim
   await new Promise((r) => setTimeout(r, 3000));
   await assert.rejects(globalThis.tcsyncPing(5000, port));
 });
+
+// --- hub mode: the bridge as the listening end ------------------------------------------------
+const te = new TextEncoder(), td = new TextDecoder();
+async function hubServe(o) {
+  const seen = [];
+  const r = await globalThis.tcsyncServe({ keyJSON: o.keyJSON ?? "", allowed: o.allowed,
+    onRequest: async (req) => { seen.push(req); return { status: 200, headers: { "content-type": "text/plain" }, body: te.encode("hub:" + req.url) }; } });
+  return { ...r, seen };
+}
+async function canReach(addr, privateKey) {
+  try { await globalThis.tcsyncInit({ addr, privateKey, dialTimeoutMs: 10000 }); return true; } catch { return false; }
+}
+
+test("serve + dial round trip: handler sees the request and the peer key", { timeout: 120000 }, async () => {
+  const c = globalThis.tcsyncNewKey();
+  const hub = await hubServe({ allowed: [c.publicKey] });
+  assert.match(hub.addr, /^tc/);
+  assert.ok(await canReach(hub.addr, c.privateKey));
+  const r = await globalThis.tcsyncFetch({ method: "GET", url: "http://couch.tailcat:5984/x?y=1", headers: {} });
+  assert.equal(r.status, 200);
+  assert.equal(td.decode(r.body), "hub:/x?y=1");
+  assert.equal(hub.seen.at(-1).peer, c.publicKey);
+  await globalThis.tcsyncServeClose();
+});
+
+test("serve with an empty allowlist admits nobody", { timeout: 120000 }, async () => {
+  const c = globalThis.tcsyncNewKey();
+  const hub = await hubServe({ allowed: [] });
+  assert.equal(await canReach(hub.addr, c.privateKey), false);
+  await globalThis.tcsyncServeClose();
+});
+
+test("serveAllow and serveClose return promises (blocking in a JS callback deadlocks Go/wasm)", { timeout: 60000 }, async () => {
+  const c = globalThis.tcsyncNewKey();
+  await hubServe({ allowed: [] });
+  const p = globalThis.tcsyncServeAllow(c.publicKey);
+  assert.ok(p instanceof Promise);
+  await p;
+  const q = globalThis.tcsyncServeClose();
+  assert.ok(q instanceof Promise);
+  await q;
+});
+
+test("serveAllow admits a new key at runtime", { timeout: 120000 }, async () => {
+  const a = globalThis.tcsyncNewKey(), b = globalThis.tcsyncNewKey();
+  const hub = await hubServe({ allowed: [a.publicKey] });
+  assert.equal(await canReach(hub.addr, b.privateKey), false);
+  await globalThis.tcsyncServeAllow(b.publicKey);
+  assert.ok(await canReach(hub.addr, b.privateKey));
+  await globalThis.tcsyncServeClose();
+});
+
+test("close + serve again keeps the same address and drops a removed key", { timeout: 180000 }, async () => {
+  const a = globalThis.tcsyncNewKey(), b = globalThis.tcsyncNewKey();
+  const first = await hubServe({ allowed: [a.publicKey, b.publicKey] });
+  assert.ok(await canReach(first.addr, b.privateKey));
+  await globalThis.tcsyncServeClose();
+  const second = await hubServe({ keyJSON: first.keyJSON, allowed: [a.publicKey] });
+  assert.equal(second.addr, first.addr);
+  assert.equal(await canReach(second.addr, b.privateKey), false);
+  assert.ok(await canReach(second.addr, a.privateKey));
+  await globalThis.tcsyncServeClose();
+});

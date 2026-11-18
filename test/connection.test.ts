@@ -15,6 +15,9 @@ function fakeBridge(over: Partial<Bridge> = {}): Bridge & { inits: number } {
     publicKey() { return PUB; },
     newKey() { return { privateKey: PRIV, publicKey: PUB }; },
     async ping() {},
+    async serve() { return { addr: "", keyJSON: "" }; },
+    async serveAllow() {},
+    async serveClose() {},
     ...over,
   };
   return b;

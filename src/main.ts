@@ -91,6 +91,9 @@ export default class TcsyncPlugin extends Plugin {
         return this.bridge.newKey();
       },
       ping: async (ms, port) => (await this.getBridge()).ping(ms, port),
+      serve: async (o) => (await this.getBridge()).serve(o),
+      serveAllow: async (k) => (await this.getBridge()).serveAllow(k),
+      serveClose: async () => { await this.bridge?.serveClose(); },
     };
   }
 

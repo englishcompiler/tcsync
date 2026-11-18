@@ -1,3 +1,6 @@
+import type { HubRequest, HubResponse } from "./hub/handler";
+import type { LiveSyncSecrets } from "./livesync/configure";
+
 export interface BridgeRequest {
   method: string;
   url: string;
@@ -20,9 +23,36 @@ export interface Bridge {
   newKey(): { privateKey: string; publicKey: string };
   /** Opens and closes a TCP connection to `port` through the tunnel; rejects if the server doesn't answer. */
   ping(timeoutMs: number, port: number): Promise<void>;
+  /** Hub mode: listen on the tunnel; `allowed` are device node keys (never empty in effect: the bridge guards). */
+  serve(o: { keyJSON: string; allowed: string[]; onRequest(r: HubRequest): Promise<HubResponse> }): Promise<{ addr: string; keyJSON: string }>;
+  serveAllow(nodekey: string): Promise<void>;
+  serveClose(): Promise<void>;
 }
 
-export type Mode = "tunnel" | "direct";
+/** hub: this computer is the hub · tunnel: this device syncs with a hub/server · direct: advanced, own CouchDB on this machine. */
+export type Mode = "hub" | "tunnel" | "direct";
+
+export interface DeviceRecord {
+  name: string;
+  /** "nodekey:…" */
+  publicKey: string;
+  addedAt: number;
+  lastSeen?: number;
+  /** pending until the device first connects; pending devices expire after 10 minutes. */
+  state: "pending" | "paired";
+}
+
+export interface HubState {
+  /** tailcat server identity (PrivateKey JSON); empty until first started. */
+  keyJSON: string;
+  addr: string;
+  secrets: LiveSyncSecrets;
+  vaultName: string;
+  devices: DeviceRecord[];
+  keepAwake: boolean;
+  /** Set once LiveSync initialised the hub store from this vault. */
+  initialised: boolean;
+}
 
 export interface TcsyncSettings {
   mode: Mode;
@@ -35,6 +65,8 @@ export interface TcsyncSettings {
   /** This device's tailcat client key (privkey:…). Generated on first run. */
   privateKey: string;
   verbose: boolean;
+  /** Hub mode state (this computer is the hub). */
+  hub?: HubState;
 }
 
 export const DEFAULT_SETTINGS: TcsyncSettings = {

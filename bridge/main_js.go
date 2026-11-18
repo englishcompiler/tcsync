@@ -15,6 +15,8 @@
 //	tcsyncPing(timeoutMs, port) -> Promise<void>  (rejects if the server doesn't answer)
 //	tcsyncClose()
 //
+// Hub mode (serve_js.go): tcsyncServe, tcsyncServeAllow, tcsyncServeClose.
+//
 // The URL host passed to tcsyncFetch is ignored; its port selects the TCP
 // port on the tailcat server.
 package main
@@ -54,6 +56,7 @@ func main() {
 	g.Set("tcsyncFetch", js.FuncOf(fetch))
 	g.Set("tcsyncClose", js.FuncOf(closeTunnel))
 	g.Set("tcsyncPing", js.FuncOf(ping))
+	registerServe(g)
 	if f := g.Get("onTcsyncReady"); f.Type() == js.TypeFunction {
 		f.Invoke()
 	}
