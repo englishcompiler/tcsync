@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { adaptBridge } from "../src/wasm";
+import { adaptBridge } from "../src/bridgeAdapter";
 
 describe("adaptBridge", () => {
   it("an older bridge still running after an update (no tcsyncServe) asks for one restart", async () => {

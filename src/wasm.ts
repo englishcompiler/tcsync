@@ -1,6 +1,7 @@
 import "../bridge/dist/wasm_exec.js";
 import TCSYNC_WASM_GZ_B64 from "tcsync:wasm";
-import type { Bridge, BridgeRequest, BridgeResponse } from "./types";
+import type { Bridge } from "./types";
+import { adaptBridge } from "./bridgeAdapter";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const g = globalThis as any;
@@ -11,34 +12,6 @@ function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(new ArrayBuffer(bin.length));
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
-}
-
-const RESTART = "tcsync was updated. Please restart Obsidian once.";
-
-/**
- * The bridge as the plugin uses it. The Go program keeps running across plugin reloads, so after an
- * update the previous version's bridge may still be the one installed: hub functions then ask for
- * one restart instead of failing obscurely.
- */
-export function adaptBridge(gl: Record<string, any>): Bridge {
-  const need = (name: string) => {
-    if (typeof gl[name] !== "function") throw new Error(RESTART);
-    return gl[name];
-  };
-  const later = <T>(f: () => T): Promise<Awaited<T>> => {
-    try { return Promise.resolve(f()) as Promise<Awaited<T>>; } catch (e) { return Promise.reject(e); }
-  };
-  return {
-    init: (o) => gl.tcsyncInit(o) as Promise<void>,
-    fetch: (r: BridgeRequest) => gl.tcsyncFetch(r) as Promise<BridgeResponse>,
-    close: () => gl.tcsyncClose(),
-    publicKey: (p) => gl.tcsyncPublicKey(p) as string,
-    newKey: () => gl.tcsyncNewKey() as { privateKey: string; publicKey: string },
-    ping: (timeoutMs, port) => gl.tcsyncPing(timeoutMs, port) as Promise<void>,
-    serve: (o) => later(() => need("tcsyncServe")(o) as Promise<{ addr: string; keyJSON: string }>),
-    serveAllow: (k) => later(() => need("tcsyncServeAllow")(k) as Promise<void>),
-    serveClose: () => (typeof gl.tcsyncServeClose === "function" ? (gl.tcsyncServeClose() as Promise<void>) : Promise.resolve()),
-  };
 }
 
 const adapt = (): Bridge => adaptBridge(g);
