@@ -1,8 +1,14 @@
 .tcsync-status.tcsync-up,
+.tcsync-status.tcsync-hub-on,
 .tcsync-status.tcsync-direct { color: var(--text-success); }
-.tcsync-status.tcsync-connecting { color: var(--text-muted); }
+.tcsync-status.tcsync-connecting,
+.tcsync-status.tcsync-idle { color: var(--text-muted); }
 .tcsync-status.tcsync-unreachable,
 .tcsync-status.tcsync-error { color: var(--text-error); }
 .tcsync-mono { font-family: var(--font-monospace); font-size: var(--font-ui-smaller); }
 .tcsync-key { display: block; margin-top: 4px; word-break: break-all; user-select: all; }
-.tcsync-setting-status { color: var(--text-muted); }
+.tcsync-setting-status { font-weight: var(--font-semibold); }
+.tcsync-steps li { margin-bottom: 4px; }
+.tcsync-qr { display: flex; justify-content: center; margin: 12px auto; max-width: 320px; background: #fff; padding: 8px; border-radius: 8px; }
+.tcsync-qr svg { width: 100%; height: auto; }
+.tcsync-pair-status { text-align: center; color: var(--text-muted); }

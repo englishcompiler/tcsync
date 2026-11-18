@@ -1,25 +1,16 @@
-import type { ConnState } from "./types";
-
-const LABEL: Record<ConnState, string> = {
-  idle: "tcsync: idle",
-  connecting: "tcsync: connecting…",
-  up: "tcsync: up",
-  unreachable: "tcsync: unreachable",
-  direct: "tcsync: direct",
-  error: "tcsync: error",
-};
-
-/** Renders the connection state into the status bar item. */
+/** Renders tcsync's status into its status bar item (short label; full sentence on hover). */
 export class StatusBar {
+  private cls = "";
   constructor(private el: HTMLElement) {
     el.addClass("tcsync-status");
-    this.set("idle");
+    this.show("tcsync", "tcsync", "idle");
   }
 
-  set(state: ConnState, detail?: string): void {
-    this.el.setText(LABEL[state]);
-    this.el.setAttr("aria-label", detail ? `${LABEL[state]} — ${detail}` : LABEL[state]);
-    for (const s of Object.keys(LABEL)) this.el.removeClass(`tcsync-${s}`);
-    this.el.addClass(`tcsync-${state}`);
+  show(label: string, tooltip: string, cls: string): void {
+    this.el.setText(label);
+    this.el.setAttr("aria-label", tooltip);
+    if (this.cls) this.el.removeClass(`tcsync-${this.cls}`);
+    this.cls = cls;
+    this.el.addClass(`tcsync-${cls}`);
   }
 }

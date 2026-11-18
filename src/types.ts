@@ -1,5 +1,6 @@
 import type { HubRequest, HubResponse } from "./hub/handler";
 import type { LiveSyncSecrets } from "./livesync/configure";
+import type { PairingPayload } from "./pair";
 
 export interface BridgeRequest {
   method: string;
@@ -67,6 +68,14 @@ export interface TcsyncSettings {
   verbose: boolean;
   /** Hub mode state (this computer is the hub). */
   hub?: HubState;
+  /** Show the advanced (own server) fields instead of pairing. */
+  advanced: boolean;
+  /** Device: name of the hub vault this vault is paired with. */
+  hubName?: string;
+  /** LiveSync initialisation in progress: answer its known dialogs until `until` (survives restarts). */
+  autopilot?: { role: "hub" | "device"; until: number };
+  /** Pairing accepted but not finished yet (e.g. LiveSync not installed or not loaded yet). */
+  pendingPair?: PairingPayload;
 }
 
 export const DEFAULT_SETTINGS: TcsyncSettings = {
@@ -76,6 +85,7 @@ export const DEFAULT_SETTINGS: TcsyncSettings = {
   directUrl: "http://127.0.0.1:5984",
   privateKey: "",
   verbose: false,
+  advanced: false,
 };
 
 export type ConnState = "idle" | "connecting" | "up" | "unreachable" | "direct" | "error";

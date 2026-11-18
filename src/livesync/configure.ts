@@ -188,3 +188,34 @@ export function startAutopilot(doc: Document, role: "hub" | "device", log: (s: s
   scan();
   return () => obs.disconnect();
 }
+
+// ---------------------------------------------------------------------------------------------
+// Access to the installed LiveSync plugin.
+
+export const LIVESYNC_ID = "obsidian-livesync";
+/** Opens Self-hosted LiveSync's page in Community plugins (install button). */
+export const LIVESYNC_PAGE = "obsidian://show-plugin?id=obsidian-livesync";
+/** Flag files LiveSync uses for a scheduled fetch/rebuild (present until it has finished). */
+export const INIT_FLAGS = ["flag_fetch.md", "flag_rebuild.md", "redflag2.md", "redflag3.md"];
+
+/** The running LiveSync, or null if it isn't installed/enabled (or its internals changed). */
+export function liveSyncOf(app: unknown): (LiveSyncLike & { isReady(): boolean }) | null {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const p = (app as any)?.plugins?.plugins?.[LIVESYNC_ID];
+  const c = p?.core;
+  if (!c?.services?.setting || !c.serviceModules?.rebuilder || !c.services.appLifecycle) return null;
+  return {
+    version: String(p.manifest?.version ?? "?"),
+    setting: c.services.setting,
+    rebuilder: c.serviceModules.rebuilder,
+    restart: () => c.services.appLifecycle.performRestart(),
+    isReady: () => Boolean(c.services.appLifecycle.isReady?.()),
+  };
+}
+
+/** True when LiveSync already points at some remote (switching to hub mode replaces it). */
+export function liveSyncConfigured(ls: LiveSyncLike): boolean {
+  const s = ls.setting.currentSettings();
+  const remotes = s.remoteConfigurations && typeof s.remoteConfigurations === "object" ? Object.keys(s.remoteConfigurations) : [];
+  return s.isConfigured === true && (Boolean(s.couchDB_URI) || remotes.length > 0);
+}

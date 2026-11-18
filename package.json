@@ -27,6 +27,7 @@
     "pouchdb-adapter-idb": "^9.0.0",
     "pouchdb-core": "^9.0.0",
     "pouchdb-find": "^9.0.0",
-    "pouchdb-mapreduce": "^9.0.0"
+    "pouchdb-mapreduce": "^9.0.0",
+    "qrcode-generator": "1.4"
   }
 }
