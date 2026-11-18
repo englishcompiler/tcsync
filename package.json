@@ -13,9 +13,19 @@
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
+    "@types/pouchdb-core": "^7.0.15",
+    "@types/pouchdb-find": "^7.3.3",
     "esbuild": "^0.25.12",
     "obsidian": "^1.14.4",
+    "pouchdb-adapter-memory": "^9.0.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.7"
+  },
+  "dependencies": {
+    "events": "^3.3.0",
+    "pouchdb-adapter-idb": "^9.0.0",
+    "pouchdb-core": "^9.0.0",
+    "pouchdb-find": "^9.0.0",
+    "pouchdb-mapreduce": "^9.0.0"
   }
 }
