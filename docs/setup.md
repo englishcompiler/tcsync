@@ -243,7 +243,7 @@ Then press **Apply** and let LiveSync rebuild or fetch as it suggests: rebuild o
 2. The note appears on the other device. In LiveSync mode, changes arrive within seconds while both sides are online.
 3. On the server, `curl -su tcsync:"$(security find-generic-password -s tcsync -a couchdb-password -w)" http://127.0.0.1:5984/obsidian | head -c 200` shows a growing `doc_count`. The documents are encrypted: open one and you won't find your note text.
 
-The first sync of a big vault is slow, because every request goes through the relay (see [Limits](../README.md#limits-read-these-first)). Do it on Wi-Fi.
+The first sync of a big vault is slow, because every request goes through the relay (see [What to expect](../README.md)). Do it on Wi-Fi.
 
 ## 8. Troubleshooting
 
