@@ -6,22 +6,7 @@ tcsync turns **Obsidian on your computer (the hub computer) into a private sync 
 
 Setting it up is **one switch on your hub computer and one QR code per phone**. You never type a password, copy a key or open a terminal.
 
-```mermaid
-flowchart LR
-  subgraph YOU["📱 Your other devices (anywhere)"]
-    P["📱 Phone"]
-    T["📲 Tablet"]
-    L["💻 Laptop"]
-  end
-  R(["🔁 Public relay<br/>passes on locked boxes,<br/>can't open them"])
-  subgraph HOME["🖥️ HUB COMPUTER (yours, at home)"]
-    H["Obsidian + tcsync<br/>keeps every device in step"]
-  end
-  P -- "🔒 encrypted" --> R
-  T -- "🔒 encrypted" --> R
-  L -- "🔒 encrypted" --> R
-  R -- "🔒 encrypted" --> H
-```
+![Your phone, tablet and laptop each connect, encrypted, to a public relay that passes on locked boxes it cannot open. The relay connects, encrypted, to Obsidian plus tcsync on your hub computer at home, which keeps every device in step. Only devices you added with a QR code get in.](https://raw.githubusercontent.com/englishcompiler/tcsync/main/docs/img/overview.png)
 
 **In one sentence:** your devices send their changes, locked with your own key, through a public relay to Obsidian on your hub computer, which passes them on to your other devices.
 
@@ -149,20 +134,7 @@ tcsync combines two open-source projects:
 - **[Self-hosted LiveSync](https://github.com/vrtmrz/obsidian-livesync)** does the actual syncing, with end-to-end encryption. It normally needs a CouchDB server; **tcsync's hub replaces that server** with a small CouchDB-compatible database (PouchDB) running inside Obsidian on your hub computer.
 - **[tailcat](https://github.com/tailscale/tailcat)** — Tailscale's encrypted tunnel without accounts — compiled to WebAssembly so it runs **inside the plugin**, on desktop and on Android, with no VPN app.
 
-```mermaid
-sequenceDiagram
-  participant LS as LiveSync (phone)
-  participant TC as tcsync (phone)
-  participant R as Relay
-  participant HUB as tcsync hub (computer)
-  participant DB as Hub database
-  LS->>TC: "send my changes"
-  TC->>R: WireGuard-encrypted packets
-  R->>HUB: (can't read them)
-  Note over HUB: is this a device<br/>added by QR code?
-  HUB->>DB: store (already end-to-end encrypted)
-  DB-->>LS: other devices' changes come back the same way
-```
+![Step 1: on your phone, LiveSync hands its changes to tcsync. Step 2: tcsync sends them encrypted to the relay, which cannot read them. Step 3: the relay passes them to the tcsync hub on the hub computer, which checks the sender is a device added by QR code and ignores anyone else. Step 4: the hub stores them in the hub database, still end-to-end encrypted. Step 5: other devices' changes come back the same way.](https://raw.githubusercontent.com/englishcompiler/tcsync/main/docs/img/how-it-works.png)
 
 The full technical picture — request flow, security model, where everything is stored — is in **[docs/architecture.md](docs/architecture.md)**.
 

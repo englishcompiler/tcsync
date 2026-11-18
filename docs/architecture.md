@@ -4,28 +4,7 @@ tcsync has two ways to run. **Hub mode** (the default, set up with one switch an
 
 ## Hub mode
 
-```mermaid
-sequenceDiagram
-  autonumber
-  participant LS as LiveSync (phone)
-  participant TC as tcsync (phone)
-  participant DERP as DERP relay
-  participant L as tcsync hub: tailcat listener<br/>(WebAssembly, in Obsidian)
-  participant H as CouchDB-compatible handler<br/>(TypeScript)
-  participant DB as PouchDB in IndexedDB
-  participant LH as LiveSync (hub computer)
-
-  LS->>TC: fetch("http://couch.tailcat:5984/obsidian/_changes?feed=longpoll…")
-  TC->>DERP: WireGuard packets over a WebSocket
-  DERP->>L: forwards ciphertext
-  Note over L: device key paired by QR code?<br/>no → dropped silently
-  L->>H: HTTP request (+ the device's key)
-  H->>DB: db.changes(…) — waits for a change or 25 s
-  LH->>H: in-process: same handler, no network
-  H-->>L: CouchDB-shaped JSON (documents are E2EE ciphertext)
-  L-->>TC: encrypted reply via DERP
-  TC-->>LS: Response
-```
+![Hub-mode request sequence: 1 LiveSync on the phone calls fetch for couch.tailcat:5984/obsidian/_changes; 2 tcsync sends WireGuard packets over a WebSocket to the DERP relay; 3 the relay forwards ciphertext to the hub's tailcat listener (WASM in Obsidian), which drops any device key not paired by QR code; 4 the listener passes the HTTP request plus the device's key to the CouchDB-compatible handler; 5 the handler calls db.changes on PouchDB in IndexedDB, waiting for a change or 25 s; 6 the hub computer's own LiveSync uses the same handler in-process; 7 the handler returns CouchDB-shaped JSON whose documents are E2EE ciphertext; 8 the encrypted reply goes back via DERP; 9 tcsync returns the Response to LiveSync.](img/architecture-hub.png)
 
 - **The hub is Obsidian on one computer.** tcsync's WebAssembly bridge opens the *listening* end of a tailcat tunnel (`tailcat.Server.Listen`) and hands each HTTP request to a small CouchDB-compatible handler over PouchDB, stored in Obsidian's IndexedDB. The hub computer's own LiveSync uses the same handler in-process.
 - **Only the requests LiveSync makes are implemented:** database info/create/delete, documents (including `_local`), `_all_docs`, `_bulk_docs`, `_bulk_get`, `_revs_diff`, `_changes` (normal, longpoll, bounded continuous; `_selector`/`_doc_ids` filters; always with `pending`), `_find`, `_index`, `_compact`. Anything else is a CouchDB-style 404.
@@ -58,29 +37,7 @@ sequenceDiagram
 
 ## One sync request, step by step
 
-```mermaid
-sequenceDiagram
-  autonumber
-  participant LS as LiveSync (phone)
-  participant TC as tcsync
-  participant GO as Go WASM bridge<br/>(tailcat client)
-  participant DERP as DERP relay
-  participant SV as tailcat serve<br/>(your computer)
-  participant DB as CouchDB
-
-  LS->>TC: fetch("http://couch.tailcat:5984/obsidian/_changes?…")
-  Note over TC: hostname matches → route it<br/>(other URLs pass through untouched)
-  TC->>GO: tcsyncFetch({method, url, headers, body})
-  GO->>DERP: WireGuard-encrypted TCP segments over a WebSocket
-  DERP->>SV: forwards ciphertext (can't read it)
-  Note over SV: device key on the allowlist?<br/>no → dropped silently
-  SV->>DB: HTTP to 127.0.0.1:5984 (Basic auth from LiveSync)
-  DB-->>SV: JSON (documents are E2EE ciphertext)
-  SV-->>DERP: encrypted reply
-  DERP-->>GO: encrypted reply
-  GO-->>TC: {status, headers, body}
-  TC-->>LS: Response
-```
+![Own-server request sequence: 1 LiveSync on the phone calls fetch for couch.tailcat:5984/obsidian/_changes; tcsync routes it because the hostname matches (other URLs pass through untouched); 2 tcsync calls tcsyncFetch on the Go WASM bridge; 3 the bridge sends WireGuard-encrypted TCP over a WebSocket to the DERP relay; 4 the relay forwards ciphertext it cannot read to tailcat serve on your computer, which drops device keys not on the allowlist; 5 tailcat serve makes an HTTP request to CouchDB on 127.0.0.1:5984 with LiveSync's Basic auth; 6 CouchDB returns JSON whose documents are E2EE ciphertext; 7 and 8 the encrypted reply goes back through the relay to the bridge; 9 the bridge returns status, headers and body to tcsync; 10 tcsync returns the Response to LiveSync.](img/architecture-own-server.png)
 
 ## Request path
 
