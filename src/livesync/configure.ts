@@ -32,7 +32,12 @@ export interface LiveSyncLike {
 }
 
 export const REMOTE_ID = "remote-tcsync-hub";
-export const TCSYNC_IGNORE_PATTERN = "\\/\\.obsidian\\/plugins\\/tcsync\\/";
+/** LiveSync hidden-file ignore pattern for tcsync's own data (keys, passphrase): never synced. */
+export function tcsyncIgnorePattern(configDir = ".obsidian"): string {
+  const dir = configDir.replace(/^\/+|\/+$/g, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\//g, "\\/");
+  // LiveSync tests vault-relative paths (no leading slash), so match at the start too.
+  return `(^|\\/)${dir}\\/plugins\\/tcsync\\/`;
+}
 
 /** What LiveSync's own setup link applies for tcsync's fixed remote (minus sync mode and secrets). */
 export const LIVESYNC_SETTINGS_FOR_TCSYNC: Record<string, unknown> = {
@@ -71,11 +76,11 @@ const REGEX_SEPARATOR = "|[]|";
 export function liveSyncSettings(
   secrets: LiveSyncSecrets,
   current: { syncInternalFilesIgnorePatterns?: unknown; syncIgnoreRegEx?: unknown },
+  configDir = ".obsidian",
 ): Record<string, unknown> {
+  const mine = tcsyncIgnorePattern(configDir);
   const hidden = String(current.syncInternalFilesIgnorePatterns ?? "");
-  const ignoreHidden = hidden.includes(TCSYNC_IGNORE_PATTERN)
-    ? hidden
-    : [hidden, TCSYNC_IGNORE_PATTERN].filter((x) => x.trim()).join(", ");
+  const ignoreHidden = hidden.includes(mine) ? hidden : [hidden, mine].filter((x) => x.trim()).join(", ");
   const files = String(current.syncIgnoreRegEx ?? "").split(REGEX_SEPARATOR).filter((x) => x.trim());
   if (!files.includes(BACKUP_IGNORE_REGEX)) files.push(BACKUP_IGNORE_REGEX);
   return {
@@ -83,6 +88,9 @@ export function liveSyncSettings(
     passphrase: secrets.e2ee,
     idDerivationVersion: 1,
     idDerivationKey: secrets.idKey,
+    // Hidden-file and plugin/customisation sync would copy tcsync's keys between devices.
+    syncInternalFiles: false,
+    usePluginSync: false,
     syncInternalFilesIgnorePatterns: ignoreHidden,
     syncIgnoreRegEx: files.join(REGEX_SEPARATOR),
   };
@@ -98,12 +106,12 @@ export function liveSyncSettings(
  */
 export async function configureLiveSync(
   ls: LiveSyncLike,
-  o: { role: "hub" | "device"; secrets: LiveSyncSecrets; initialise?: boolean },
+  o: { role: "hub" | "device"; secrets: LiveSyncSecrets; initialise?: boolean; configDir?: string },
 ): Promise<"scheduled" | "applied" | "fallback"> {
   if (typeof ls?.setting?.applyPartial !== "function" || typeof ls.setting.currentSettings !== "function"
     || typeof ls.rebuilder?.scheduleFetch !== "function" || typeof ls.rebuilder.scheduleRebuild !== "function"
     || typeof ls.restart !== "function") return "fallback";
-  await ls.setting.applyPartial(liveSyncSettings(o.secrets, ls.setting.currentSettings()), true);
+  await ls.setting.applyPartial(liveSyncSettings(o.secrets, ls.setting.currentSettings(), o.configDir), true);
   if (o.role === "device") {
     await ls.rebuilder.scheduleFetch();
     return "scheduled";
@@ -123,6 +131,16 @@ export async function configureLiveSync(
 export async function enableLiveSync(ls: LiveSyncLike): Promise<void> {
   await ls.setting.applyPartial(SYNC_MODE_LIVE, true);
   ls.restart();
+}
+
+/** Every sync trigger off: used when this computer stops being the hub. */
+export const SYNC_MODE_OFF: Record<string, unknown> = {
+  liveSync: false, periodicReplication: false, syncOnStart: false, syncOnSave: false,
+  syncOnEditorSave: false, syncOnFileOpen: false, syncAfterMerge: false,
+};
+
+export async function pauseLiveSync(ls: LiveSyncLike): Promise<void> {
+  await ls.setting.applyPartial(SYNC_MODE_OFF, true);
 }
 
 export function liveSyncVersionWarning(version: string): string | null {
@@ -158,6 +176,8 @@ const RULES: Rule[] = [
   { title: /^Data retrieval scheduled$/, roles: ["device"], click: "Compare time and take newer" },
   { title: /^Conflict & Deletion Options$/, roles: ["device"], click: "Keep local files even if deleted on remote" },
   { title: /^Resume scheduled fetch\?$/, roles: ["device"], click: "Continue with these choices" },
+  // The hub's database was rebuilt (e.g. its storage was cleared): re-fetch here, merging.
+  { title: /^Locked$/, roles: ["device"], click: "Reset Synchronisation on This Device" },
 ];
 
 /** Answers one dialog if it is a known LiveSync initialisation dialog. Returns true if it clicked. */

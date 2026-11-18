@@ -53,6 +53,8 @@ export interface HubState {
   keepAwake: boolean;
   /** Set once LiveSync initialised the hub store from this vault. */
   initialised: boolean;
+  /** Changes whenever the hub database is rebuilt; devices re-fetch when it changes. */
+  epoch: string;
 }
 
 export interface TcsyncSettings {
@@ -72,10 +74,14 @@ export interface TcsyncSettings {
   advanced: boolean;
   /** Device: name of the hub vault this vault is paired with. */
   hubName?: string;
+  /** Device: the hub epoch last synced with (see HubState.epoch). */
+  hubEpoch?: string;
+  /** Device: the vault's LiveSync secrets from pairing (to re-sync after a hub rebuild). */
+  deviceSecrets?: LiveSyncSecrets;
   /** LiveSync initialisation in progress: answer its known dialogs until `until` (survives restarts). */
   autopilot?: { role: "hub" | "device"; until: number };
   /** Pairing accepted but not finished yet (e.g. LiveSync not installed or not loaded yet). */
-  pendingPair?: PairingPayload;
+  pendingPair?: PairingPayload & { claimed?: boolean; backedUp?: boolean };
 }
 
 export const DEFAULT_SETTINGS: TcsyncSettings = {

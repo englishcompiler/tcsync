@@ -209,10 +209,18 @@ async function changes(db: Database, q: URLSearchParams, b: Record<string, unkno
     await waitForChange(db, { ...opts, since: seq(res.last_seq) }, timeout, signal);
     if (!signal?.aborted) res = await page();
   }
+  // `pending` like CouchDB's (an estimate): unfiltered, it's the sequence distance to the end, which
+  // is O(1); recounting every page would make a large first fetch O(n²). Filtered feeds are
+  // small (live sync), so they are counted exactly.
   let pending = 0;
   if (limit !== undefined && res.results.length > 0) {
-    const rest = (await db.changes({ ...opts, include_docs: false, since: seq(res.last_seq) } as never)) as unknown as { results: unknown[] };
-    pending = rest.results.length;
+    if (opts.selector === undefined && opts.doc_ids === undefined && typeof res.last_seq === "number") {
+      const end = Number((await db.info()).update_seq);
+      pending = Number.isFinite(end) ? Math.max(0, end - res.last_seq) : 0;
+    } else {
+      const rest = (await db.changes({ ...opts, include_docs: false, since: seq(res.last_seq) } as never)) as unknown as { results: unknown[] };
+      pending = rest.results.length;
+    }
   }
   const results = res.results.map((c) => {
     const { doc, ...row } = c;

@@ -5,10 +5,12 @@ import { installLiveSyncHook, patchGlobalFetch, type HookHandle } from "./hooks"
 import { Hub, newHubState } from "./hub/hub";
 import { keepHubAlive, type ElectronLike } from "./hub/keepAwake";
 import { fromHubResponse, toHubRequest } from "./hub/route";
-import { createStore, type HubStore } from "./hub/store";
+import { createStore, hubStorePrefix, type HubStore } from "./hub/store";
+import { CLAIM_PATH, EPOCH_PATH } from "./hub/hub";
+import { autopilotRole, enterHubMode, hubWasRebuilt, shouldStartHub } from "./modes";
 import {
   configureLiveSync, enableLiveSync, INIT_FLAGS, LIVESYNC_ID, LIVESYNC_PAGE, liveSyncConfigured, liveSyncOf, liveSyncVersionWarning,
-  startAutopilot,
+  pauseLiveSync, startAutopilot,
 } from "./livesync/configure";
 import { orderBefore } from "./loadOrder";
 import { pairingLink, readPairing, type PairingPayload } from "./pair";
@@ -42,6 +44,7 @@ export default class TcsyncPlugin extends Plugin {
   private unreachableSince = 0;
   private settingsLoaded!: Promise<void>;
   private unloaded = false;
+  private hubWatcher = false;
   private hubReady: Promise<Hub> | null = null;
   private hubReadyResolve: ((h: Hub) => void) | null = null;
   /** Refreshes the settings screen if it's open. */
@@ -149,7 +152,12 @@ export default class TcsyncPlugin extends Plugin {
   }
 
   private async afterLayout(): Promise<void> {
-    if (this.settings.autopilot) this.resumeAutopilot();
+    let fetchScheduled = false;
+    for (const f of INIT_FLAGS) if (await this.app.vault.adapter.exists(f)) fetchScheduled = true;
+    const role = autopilotRole(this.settings, fetchScheduled);
+    if (role) this.resumeAutopilot(role);
+    else if (this.settings.autopilot) { this.settings.autopilot = undefined; await this.saveSettings(); }
+    if (this.settings.mode === "tunnel" && this.settings.hubName && !this.settings.advanced) this.watchForHubRebuild();
     await this.prepare();
     if (this.settings.pendingPair && !this.settings.autopilot) void this.resumePendingPair();
     const ls = liveSyncOf(this.app);
@@ -161,7 +169,8 @@ export default class TcsyncPlugin extends Plugin {
   private async prepare(): Promise<void> {
     try {
       if (this.settings.mode === "hub") {
-        await this.startHub();
+        if (shouldStartHub(this.settings, Platform.isMobile)) await this.startHub();
+        else this.onState("error", "the hub has to be a computer: on this device choose “Syncing with a hub”");
       } else if (this.settings.mode === "tunnel") {
         await this.ensureDeviceKey();
         if (this.settings.addr) await this.conn.ensureUp().catch(() => {});
@@ -178,10 +187,11 @@ export default class TcsyncPlugin extends Plugin {
   // Hub mode
 
   private async startHub(): Promise<void> {
-    if (!this.settings.hub) return;
+    if (!this.settings.hub || !shouldStartHub(this.settings, Platform.isMobile)) return;
     try {
       await this.getBridge();
-      this.hubStore ??= createStore("idb");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      this.hubStore ??= createStore("idb", hubStorePrefix(String((this.app as any).appId ?? this.app.vault.getName())));
       this.hub = new Hub({
         bridge: this.lazyBridge(),
         store: this.hubStore,
@@ -191,17 +201,23 @@ export default class TcsyncPlugin extends Plugin {
         setTimer: (fn, ms) => { const t = window.setTimeout(fn, ms); return () => window.clearTimeout(t); },
         onChange: () => this.refresh(),
       });
+      // Decide "was the database lost?" before anything (this computer's LiveSync included) can
+      // write to it: LiveSync would otherwise refill it and the loss would go unnoticed.
+      const lost = !this.settings.autopilot && (await this.hub.storeWasLost());
+      if (lost) await this.hub.newEpoch();
+      this.hubReadyResolve?.(this.hub);
+      this.registerDomEvent(window, "online", () => { if (this.hub && !this.hub.serving) void this.hub.restart(); });
       await this.hub.start();
       this.hubError = "";
-      this.hubReadyResolve?.(this.hub);
       this.applyKeepAlive();
       this.refresh();
-      if (!this.settings.autopilot && (await this.hub.storeWasLost())) {
+      if (lost) {
         console.warn("[tcsync] the hub database is empty although this hub was set up before; rebuilding it from this vault");
         new Notice("tcsync: the hub's database was empty, so it is being rebuilt from this vault. Your devices will catch up by themselves.", 15000);
         await this.initialiseLiveSync("hub", true);
       }
     } catch (e) {
+      // The hub keeps retrying by itself (Hub.restart); show why it's down meanwhile.
       this.hubError = e instanceof Error ? e.message : String(e);
       this.refresh();
     }
@@ -243,13 +259,12 @@ export default class TcsyncPlugin extends Plugin {
     });
     if (!ok) return;
     this.conn.reset();
+    this.settings = enterHubMode(this.settings);
     this.settings.hub ??= newHubState(this.app.vault.getName());
-    this.settings.mode = "hub";
-    this.settings.advanced = false;
     await this.saveSettings();
     await this.startHub();
-    if (this.hubError) {
-      new Notice(`tcsync: ${statusText("hub", "error", { detail: this.hubError })}`, 15000);
+    if (this.hubError || !this.hub?.serving) {
+      new Notice(`tcsync: ${statusText("hub", "error", { detail: this.hubError || this.hub?.lastError })}`, 15000);
       return;
     }
     await this.initialiseLiveSync("hub", await this.hubStore!.isEmpty());
@@ -264,6 +279,9 @@ export default class TcsyncPlugin extends Plugin {
       warning: true,
     });
     if (!ok) return;
+    // Without a hub this vault's LiveSync has nowhere to sync to: pause it.
+    const ls = liveSyncOf(this.app);
+    if (ls) await pauseLiveSync(ls);
     this.releaseKeepAlive?.();
     this.releaseKeepAlive = null;
     await this.hub?.stop();
@@ -288,7 +306,8 @@ export default class TcsyncPlugin extends Plugin {
       deviceName: name,
       link,
       expiresAt,
-      isPaired: () => this.settings.hub?.devices.find((d) => d.publicKey === record.publicKey)?.state === "paired",
+      // The device swaps the code's one-time key for its own when it pairs: match the record, not the key.
+      isPaired: () => this.settings.hub?.devices.find((d) => d.addedAt === record.addedAt && d.name === record.name)?.state === "paired",
     }).open();
     return link;
   }
@@ -359,9 +378,59 @@ export default class TcsyncPlugin extends Plugin {
       this.restartWhenLiveSyncAppears();
       return;
     }
-    const zip = await backupNotes(this.vaultFs(), new Date());
-    if (zip) console.info(`[tcsync] backed up this vault's notes to ${zip}`);
+    if (!p.claimed && !(await this.claimDevice(p))) return;
+    if (!p.backedUp) {
+      // Marked first: if the backup ever crashes the app, the next start must not try again.
+      this.settings.pendingPair = { ...p, claimed: true, backedUp: true };
+      await this.saveSettings();
+      try {
+        const r = await backupNotes(this.vaultFs(), new Date());
+        if ("path" in r) console.info(`[tcsync] backed up this vault's notes to ${r.path}`);
+        else if (r.skipped === "too-large") new Notice("tcsync: this vault is large, so no backup zip was made. Your notes are still kept and merged, never deleted.", 12000);
+      } catch (e) {
+        console.warn("[tcsync] backup failed; continuing without it", e);
+      }
+    }
     await this.finishPairing(p);
+  }
+
+  /**
+   * Pairing step 2: replace the one-time key from the code with this device's own key, so the
+   * code (which may have been shared or photographed) can't be used again.
+   */
+  private async claimDevice(p: PairingPayload): Promise<boolean> {
+    const own = (await this.getBridge()).newKey();
+    let status = 0;
+    let epoch: string | undefined;
+    try {
+      const res = await this.conn.request(`http://${this.settings.host}:5984${CLAIM_PATH}`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ publicKey: own.publicKey }),
+      });
+      status = res.status;
+      if (status === 200) epoch = ((await res.json()) as { epoch?: string }).epoch;
+    } catch {
+      status = 0;
+    }
+    if (status !== 200) {
+      new Notice(status === 403
+        ? "tcsync: this code was already used. Make a new one on your computer."
+        : "tcsync: couldn't finish pairing. Make sure Obsidian is open on your computer, then scan a new code.", 15000);
+      if (status === 403) { this.settings.pendingPair = undefined; this.settings.addr = ""; await this.saveSettings(); }
+      return false;
+    }
+    this.settings.privateKey = own.privateKey;
+    this.settings.hubEpoch = epoch;
+    this.settings.deviceSecrets = { e2ee: p.e2ee, idKey: p.idKey };
+    this.settings.pendingPair = { ...p, claimed: true };
+    await this.saveSettings();
+    // The hub restarts its listener to drop the one-time key; reconnect with ours.
+    this.conn.reset();
+    await new Promise((r) => window.setTimeout(r, 1500));
+    for (let i = 0; i < 3; i++) {
+      try { await this.conn.ensureUp(); return true; } catch { this.conn.reset(); }
+    }
+    new Notice("tcsync: paired, but couldn't reconnect yet. tcsync keeps trying.", 10000);
+    return true;
   }
 
   private async finishPairing(p: PairingPayload): Promise<void> {
@@ -404,7 +473,7 @@ export default class TcsyncPlugin extends Plugin {
     if (!ls || !secrets) return;
     this.settings.autopilot = { role, until: Date.now() + AUTOPILOT_MS };
     await this.saveSettings();
-    const r = await configureLiveSync(ls, { role, secrets, initialise });
+    const r = await configureLiveSync(ls, { role, secrets, initialise, configDir: this.app.vault.configDir });
     if (r === "applied") {
       this.settings.autopilot = undefined;
       if (role === "hub") await this.hub?.markInitialised();
@@ -416,14 +485,9 @@ export default class TcsyncPlugin extends Plugin {
     }
   }
 
-  private resumeAutopilot(): void {
-    const ap = this.settings.autopilot;
-    if (!ap) return;
-    if (Date.now() > ap.until) {
-      this.settings.autopilot = undefined;
-      void this.saveSettings();
-      return;
-    }
+  private resumeAutopilot(role: "hub" | "device"): void {
+    const ap = { role };
+    this.stopAutopilot?.();
     this.stopAutopilot = startAutopilot(document, ap.role, (s) => console.info(`[tcsync] ${s}`));
     new Notice(ap.role === "hub" ? "tcsync: setting up the hub… (this takes a minute)" : "tcsync: downloading your notes from the hub…", 8000);
     const t = window.setInterval(() => void (async () => {
@@ -432,6 +496,7 @@ export default class TcsyncPlugin extends Plugin {
       for (const f of INIT_FLAGS) if (await this.app.vault.adapter.exists(f)) return;
       if (document.querySelector(".modal")) return;
       window.clearInterval(t);
+      if (this.hubWatcher) { this.stopAutopilot?.(); this.stopAutopilot = null; }
       this.stopAutopilot?.();
       this.stopAutopilot = null;
       this.settings.autopilot = undefined;
@@ -441,6 +506,18 @@ export default class TcsyncPlugin extends Plugin {
       await enableLiveSync(ls);
     })(), 2000);
     this.register(() => window.clearInterval(t));
+  }
+
+  /**
+   * On a paired device, answers LiveSync's "Locked" dialog (the hub's database was rebuilt) with
+   * "Reset Synchronisation on This Device": LiveSync schedules a merge-fetch and restarts, and on
+   * the next start autopilotRole() answers the fetch questions.
+   */
+  private watchForHubRebuild(): void {
+    if (this.stopAutopilot) return;
+    this.hubWatcher = true;
+    this.stopAutopilot = startAutopilot(document, "device", (s) => console.info(`[tcsync] ${s}`));
+    this.register(() => { this.stopAutopilot?.(); this.stopAutopilot = null; });
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -455,6 +532,7 @@ export default class TcsyncPlugin extends Plugin {
     };
     return {
       list: () => list(""),
+      size: async (p) => (await a.stat(p))?.size ?? 0,
       read: async (p) => new Uint8Array(await a.readBinary(p)),
       write: (p, d) => a.writeBinary(p, d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength) as ArrayBuffer),
       remove: (p) => a.remove(p),
@@ -508,7 +586,41 @@ export default class TcsyncPlugin extends Plugin {
     new Notice(`tcsync: device key copied\n${key}`);
   }
 
+  private checkingEpoch = false;
+  /**
+   * On a paired device, after (re)connecting: if the hub's database was rebuilt since we last
+   * synced (its epoch changed), LiveSync here can't decrypt the new data (new parameters) and may
+   * not notice by itself, so re-run the merge-fetch with this vault's secrets.
+   */
+  private async checkHubEpoch(): Promise<void> {
+    const st = this.settings;
+    if (this.checkingEpoch || st.mode !== "tunnel" || st.advanced || !st.hubName || st.pendingPair || st.autopilot) return;
+    this.checkingEpoch = true;
+    try {
+      const res = await this.conn.request(`http://${st.host}:5984${EPOCH_PATH}`, { method: "GET" });
+      if (res.status !== 200) return;
+      const { epoch } = (await res.json()) as { epoch?: string };
+      if (!epoch) return;
+      if (hubWasRebuilt(st, epoch) && st.deviceSecrets) {
+        st.hubEpoch = epoch;
+        await this.saveSettings();
+        new Notice("tcsync: your hub was rebuilt. Re-syncing this device (your notes here are kept)…", 12000);
+        await this.initialiseLiveSync("device", false, st.deviceSecrets);
+      } else if (st.hubEpoch !== epoch) {
+        st.hubEpoch = epoch;
+        await this.saveSettings();
+      }
+    } catch {
+      /* offline: try again next time */
+    } finally {
+      this.checkingEpoch = false;
+    }
+  }
+
+  private prevConn: ConnState = "idle";
   private onState(s: ConnState, detail?: string): void {
+    if (s === "up" && this.prevConn !== "up") void this.checkHubEpoch();
+    this.prevConn = s;
     this.lastDetail = detail ?? "";
     if (s === "unreachable") this.unreachableSince ||= Date.now();
     else this.unreachableSince = 0;
@@ -519,12 +631,13 @@ export default class TcsyncPlugin extends Plugin {
   status(): { label: string; text: string; cls: string } {
     const m = this.settings.mode;
     let shown: Shown;
-    if (m === "hub") shown = this.hubError ? "error" : this.hub ? "hub-on" : "connecting";
+    const hubDown = m === "hub" && (this.hubError || (this.hub && !this.hub.serving && this.hub.lastError));
+    if (m === "hub") shown = hubDown ? "error" : this.hub?.serving ? "hub-on" : "connecting";
     else if (m === "tunnel" && !this.settings.addr) shown = "idle";
     else shown = this.conn.state === "idle" ? "connecting" : this.conn.state;
     const o = {
       devices: this.settings.hub?.devices.filter((d) => d.state === "paired").length ?? 0,
-      detail: m === "hub" ? this.hubError : this.lastDetail,
+      detail: m === "hub" ? (this.hub?.lastError || this.hubError) : this.lastDetail,
       longOffline: this.unreachableSince > 0 && Date.now() - this.unreachableSince > LONG_OFFLINE_MS,
     };
     return { label: statusLabel(m, shown, o), text: statusText(m, shown, o), cls: shown };

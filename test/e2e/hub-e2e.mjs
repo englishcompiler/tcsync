@@ -145,7 +145,20 @@ try {
     n.ok ? pass("expired-link") : fail("expired-link", n.last);
   }
 
-  // 8. remove -----------------------------------------------------------------------------------
+  // 8. store lost (device must recover by itself) --------------------------------------------------------------------------------
+  if (want("store-lost")) {
+    await pa.eval(`await ${tc}.hub.stop(); const dbs=await indexedDB.databases(); for (const d of dbs) if (d.name && d.name.includes('tcsync-hub-')) indexedDB.deleteDatabase(d.name); setTimeout(()=>app.commands.executeCommandById('app:reload'),500); return dbs.map(d=>d.name).filter(n=>n?.includes('tcsync-hub-')).length`);
+    const done = await setupDone(pa, A, 300000);
+    const docs2 = await pa.eval(`const r=await ${tc}.hub.handle({method:'GET',url:'/obsidian',headers:{},body:new Uint8Array()}); return JSON.parse(new TextDecoder().decode(r.body)).doc_count`).catch(() => 0);
+    const fa = await files(pa);
+    await write(pa, "After rebuild.md", "written after the hub rebuilt");
+    const rec = await arrives(pb, "After rebuild.md", "after the hub rebuilt", 300000);
+    const fbb = await files(pb).catch(() => []);
+    done.ok && docs2 > 0 && fa.includes("Hub note 1.md") && rec.ok && fbb.includes("B own note.md")
+      ? pass("store-lost", `rebuilt with ${docs2} docs, notes intact; device recovered by itself in ${rec.secs}s`)
+      : fail("store-lost", JSON.stringify({ done, docs2, rec, fbb }));
+  }
+  // 9. remove -----------------------------------------------------------------------------------
   if (want("remove")) {
     const pub = data(A).hub.devices.find((d) => d.name === "Desktop B").publicKey;
     await pa.eval(`void ${tc}.removeDevice(${JSON.stringify(pub)}, 'Desktop B'); return 1`);
@@ -157,14 +170,6 @@ try {
     !r.ok && gone ? pass("remove", "edit from removed device did not arrive") : fail("remove", JSON.stringify({ arrived: r.ok, gone }));
   }
 
-  // 9. store lost --------------------------------------------------------------------------------
-  if (want("store-lost")) {
-    await pa.eval(`await ${tc}.hub.stop(); const dbs=await indexedDB.databases(); for (const d of dbs) if (d.name && d.name.includes('tcsync-hub-')) indexedDB.deleteDatabase(d.name); setTimeout(()=>app.commands.executeCommandById('app:reload'),500); return dbs.map(d=>d.name).filter(n=>n?.includes('tcsync-hub-')).length`);
-    const done = await setupDone(pa, A, 300000);
-    const docs2 = await pa.eval(`const r=await ${tc}.hub.handle({method:'GET',url:'/obsidian',headers:{},body:new Uint8Array()}); return JSON.parse(new TextDecoder().decode(r.body)).doc_count`).catch(() => 0);
-    const fa = await files(pa);
-    done.ok && docs2 > 0 && fa.includes("Hub note 1.md") ? pass("store-lost", `rebuilt with ${docs2} docs, notes intact`) : fail("store-lost", JSON.stringify({ done, docs2 }));
-  }
 } catch (e) {
   fail("harness", e.stack ?? String(e));
 } finally {

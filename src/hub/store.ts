@@ -17,6 +17,14 @@ export interface HubStore {
 
 const REGISTRY = "dbs";
 
+/**
+ * IndexedDB is shared by every vault in the app, so the hub's databases are namespaced by the
+ * vault's app id (as LiveSync does for its own).
+ */
+export function hubStorePrefix(appId: string): string {
+  return `tcsync-hub-${appId}-`;
+}
+
 export function createStore(adapter: "idb" | "memory", prefix = "tcsync-hub-"): HubStore {
   const meta = new PouchDB(`${prefix}meta`, { adapter });
   const open = new Map<string, Database>();
@@ -30,8 +38,10 @@ export function createStore(adapter: "idb" | "memory", prefix = "tcsync-hub-"): 
   async function names(): Promise<{ names: string[]; _rev?: string }> {
     try {
       return (await meta.get(REGISTRY)) as unknown as { names: string[]; _rev?: string };
-    } catch {
-      return { names: [] };
+    } catch (e) {
+      // Only "no registry yet" means empty; anything else (IndexedDB trouble) must not look empty.
+      if ((e as { status?: number }).status === 404) return { names: [] };
+      throw e;
     }
   }
   async function setNames(n: string[]): Promise<void> {

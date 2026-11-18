@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import memory from "pouchdb-adapter-memory";
 import { PouchDB } from "../src/hub/pouch";
 import { createStore } from "../src/hub/store";
-import { Hub, newHubState, PENDING_TTL_MS, type HubBridge } from "../src/hub/hub";
+import { Hub, newHubState, PENDING_TTL_MS, CLAIM_PATH, EPOCH_PATH, type HubBridge } from "../src/hub/hub";
+import { hubStorePrefix } from "../src/hub/store";
 import type { HubState } from "../src/types";
 import type { HubRequest } from "../src/hub/handler";
 
@@ -22,13 +23,13 @@ function fakeBridge() {
   return b;
 }
 
-function setup(state?: HubState) {
+function setup(state?: HubState, storeOver?: Partial<ReturnType<typeof createStore>>) {
   let s: HubState = state ?? newHubState("My vault");
   const bridge = fakeBridge();
   let now = 1_000_000;
   const timers: { at: number; fn: () => void }[] = [];
   const hub = new Hub({
-    bridge, store: createStore("memory", `h${Math.random().toString(36).slice(2)}-`),
+    bridge, store: { ...createStore("memory", `h${Math.random().toString(36).slice(2)}-`), ...storeOver },
     state: () => s, save: async (x) => { s = x; }, now: () => now,
     setTimer: (fn, ms) => { const t = { at: now + ms, fn }; timers.push(t); return () => timers.splice(timers.indexOf(t), 1); },
   });
@@ -39,6 +40,8 @@ function setup(state?: HubState) {
   };
   return { hub, bridge, state: () => s, advance };
 }
+const OWN = "nodekey:" + "a".repeat(64), THIEF = "nodekey:" + "b".repeat(64), OTHER = "nodekey:" + "c".repeat(64);
+const settle = () => new Promise((r) => setTimeout(r, 400));
 const req = (url: string, peer?: string): HubRequest => ({ method: "GET", url, headers: {}, body: new Uint8Array(), peer });
 
 describe("newHubState", () => {
@@ -47,6 +50,7 @@ describe("newHubState", () => {
     expect(s.secrets.e2ee).toMatch(/^[A-Za-z0-9_-]{32}$/);
     expect(s.secrets.idKey).toMatch(/^[0-9a-f]{64}$/);
     expect(s).toMatchObject({ vaultName: "V", devices: [], keepAwake: true, keyJSON: "", addr: "" });
+    expect(s.epoch).toMatch(/^[0-9a-f]{16}$/);
     expect(newHubState("V").secrets.e2ee).not.toBe(s.secrets.e2ee);
   });
 });
@@ -70,11 +74,16 @@ describe("Hub", () => {
     expect(t.state().devices).toHaveLength(1);
   });
 
-  it("first request from a pending device marks it paired and sets lastSeen", async () => {
+  it("a pending device's ordinary requests don't pair it (only a claim does); a paired device's set lastSeen", async () => {
     await t.hub.start();
     await t.hub.addDevice("Phone");
     await t.bridge.onRequest!(req("/", "nodekey:1"));
-    expect(t.state().devices[0]).toMatchObject({ state: "paired", lastSeen: 1_000_000 });
+    expect(t.state().devices[0].state).toBe("pending");
+    await t.bridge.onRequest!({ method: "POST", url: CLAIM_PATH, headers: {}, body: te.encode(JSON.stringify({ publicKey: OWN })), peer: "nodekey:1" });
+    await settle();
+    await t.advance(120_000);
+    await t.bridge.onRequest!(req("/", OWN));
+    expect(t.state().devices[0]).toMatchObject({ state: "paired", lastSeen: 1_120_000 });
   });
 
   it("expires pending devices after 10 minutes via a listener restart", async () => {
@@ -88,7 +97,8 @@ describe("Hub", () => {
   it("a paired device does not expire", async () => {
     await t.hub.start();
     await t.hub.addDevice("Phone");
-    await t.bridge.onRequest!(req("/", "nodekey:1"));
+    await t.bridge.onRequest!({ method: "POST", url: CLAIM_PATH, headers: {}, body: te.encode(JSON.stringify({ publicKey: OWN })), peer: "nodekey:1" });
+    await settle();
     await t.advance(PENDING_TTL_MS + 1);
     expect(t.state().devices).toHaveLength(1);
   });
@@ -122,6 +132,79 @@ describe("Hub", () => {
     await t.hub.handle({ ...req("/obsidian"), method: "PUT" });
     await t.hub.handle({ method: "PUT", url: "/obsidian/a", headers: {}, body: te.encode("{}") });
     expect(await t.hub.storeWasLost()).toBe(false);
+  });
+
+  it("a failed restart doesn't block later restarts, and the hub retries until it serves again", async () => {
+    await t.hub.start();
+    await t.hub.addDevice("A");
+    let failures = 1;
+    const serve = t.bridge.serve;
+    t.bridge.serve = async (o) => { if (failures-- > 0) throw new Error("relay unreachable"); return serve(o); };
+    await t.hub.removeDevice("nodekey:1").catch(() => {});
+    expect(t.hub.serving).toBe(false);
+    expect(t.hub.lastError).toMatch(/relay unreachable/);
+    await t.advance(60_000);
+    expect(t.hub.serving).toBe(true);
+    expect(t.hub.lastError).toBe("");
+    await t.hub.addDevice("B");
+    await t.hub.removeDevice("nodekey:2");
+    expect(t.bridge.log.at(-1)).toBe("serve(0)");
+  });
+
+  it("a failed first start is retried too", async () => {
+    let failures = 1;
+    const serve = t.bridge.serve;
+    t.bridge.serve = async (o) => { if (failures-- > 0) throw new Error("offline"); return serve(o); };
+    await expect(t.hub.start()).rejects.toThrow("offline");
+    await t.advance(60_000);
+    expect(t.hub.serving).toBe(true);
+  });
+
+  it("storeWasLost is false (not a destructive rebuild) when the store can't be read", async () => {
+    const u = setup(undefined, { isEmpty: async () => { throw new Error("connection is closing"); } });
+    await u.hub.markInitialised();
+    expect(await u.hub.storeWasLost()).toBe(false);
+  });
+
+  it("claim: a pending device swaps the minted key for its own; the link can't be used again", async () => {
+    await t.hub.start();
+    await t.hub.addDevice("Phone");
+    const claim = (peer: string, pub: string) => t.bridge.onRequest!({ method: "POST", url: CLAIM_PATH, headers: {}, body: te.encode(JSON.stringify({ publicKey: pub })), peer }) as Promise<{ status: number }>;
+    expect((await claim("nodekey:1", OWN)).status).toBe(200);
+    await settle();
+    expect(t.state().devices[0]).toMatchObject({ publicKey: OWN, state: "paired" });
+    expect(t.bridge.allowed).toEqual([OWN]);
+    expect((await claim("nodekey:1", THIEF)).status).toBe(403);
+    expect((await claim(OWN, OTHER)).status).toBe(403);
+    expect(t.state().devices.map((d) => d.publicKey)).toEqual([OWN]);
+  });
+
+  it("claim rejects a malformed key", async () => {
+    await t.hub.start();
+    await t.hub.addDevice("Phone");
+    const r = (await t.bridge.onRequest!({ method: "POST", url: CLAIM_PATH, headers: {}, body: te.encode('{"publicKey":"nope"}'), peer: "nodekey:1" })) as { status: number };
+    expect(r.status).toBe(400);
+  });
+
+  it("the store prefix is per app/vault, so two vaults on one computer never share a hub database", () => {
+    expect(hubStorePrefix("abc123")).toBe("tcsync-hub-abc123-");
+    expect(hubStorePrefix("abc123")).not.toBe(hubStorePrefix("def456"));
+  });
+
+  it("serves the hub epoch to devices, and a claim's answer carries it", async () => {
+    const r = await t.hub.handle(req(EPOCH_PATH, "nodekey:x"));
+    expect(JSON.parse(new TextDecoder().decode(r.body))).toEqual({ epoch: t.state().epoch });
+    await t.hub.start();
+    await t.hub.addDevice("Phone");
+    const c = (await t.bridge.onRequest!({ method: "POST", url: CLAIM_PATH, headers: {}, body: te.encode(JSON.stringify({ publicKey: OWN })), peer: "nodekey:1" })) as { body: Uint8Array };
+    expect(JSON.parse(new TextDecoder().decode(c.body))).toEqual({ ok: true, epoch: t.state().epoch });
+  });
+
+  it("newEpoch changes the epoch (after the hub database is rebuilt)", async () => {
+    const before = t.state().epoch;
+    await t.hub.newEpoch();
+    expect(t.state().epoch).not.toBe(before);
+    expect(t.state().epoch).toMatch(/^[0-9a-f]{16}$/);
   });
 
   it("handle() serves the in-process path through the same handler", async () => {

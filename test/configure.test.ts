@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  configureLiveSync, liveSyncSettings, SYNC_MODE_LIVE, answerModal, liveSyncVersionWarning,
+  configureLiveSync, liveSyncSettings, SYNC_MODE_LIVE, answerModal, liveSyncVersionWarning, pauseLiveSync,
   type LiveSyncLike, type ModalView,
 } from "../src/livesync/configure";
 
@@ -44,7 +44,7 @@ describe("configureLiveSync", () => {
     await configureLiveSync(ls, { role: "device", secrets });
     const p = ls.saved().syncInternalFilesIgnorePatterns as string;
     expect(p).toContain("\\/obsidian-livesync\\/");
-    expect(p).toContain("\\/\\.obsidian\\/plugins\\/tcsync\\/");
+    expect(p).toContain("\\.obsidian\\/plugins\\/tcsync\\/");
   });
   it("hub with initialise: schedules a rebuild (initialise the remote)", async () => {
     const ls = fakeLiveSync();
@@ -73,6 +73,21 @@ describe("configureLiveSync", () => {
     const again = liveSyncSettings(secrets, { syncIgnoreRegEx: liveSyncSettings(secrets, {}).syncIgnoreRegEx });
     expect(again.syncIgnoreRegEx).toBe("^tcsync-backup-\\d{8}-\\d{6}\\.zip$");
     expect(new RegExp("^tcsync-backup-\\d{8}-\\d{6}\\.zip$").test("tcsync-backup-20261118-140903.zip")).toBe(true);
+  });
+  it("secrets never sync: the ignore pattern matches tcsync's data at the vault root, and hidden-file/plugin sync are off", () => {
+    const s = liveSyncSettings(secrets, { syncInternalFilesIgnorePatterns: "\\/node_modules\\/" }, ".obsidian");
+    const res = String(s.syncInternalFilesIgnorePatterns).split(",").map((x) => new RegExp(x.trim()));
+    expect(res.some((r) => r.test(".obsidian/plugins/tcsync/data.json"))).toBe(true);
+    expect(res.some((r) => r.test("/.obsidian/plugins/tcsync/data.json"))).toBe(true);
+    expect(res.some((r) => r.test(".obsidian/plugins/obsidian-livesync/data.json"))).toBe(false);
+    expect(s).toMatchObject({ syncInternalFiles: false, usePluginSync: false });
+    const custom = liveSyncSettings(secrets, {}, ".config-obs");
+    expect(String(custom.syncInternalFilesIgnorePatterns).split(",").some((x) => new RegExp(x.trim()).test(".config-obs/plugins/tcsync/data.json"))).toBe(true);
+  });
+  it("pauseLiveSync switches every sync trigger off (used when the hub stops)", async () => {
+    const ls = fakeLiveSync();
+    await pauseLiveSync(ls);
+    expect(ls.saved()).toMatchObject({ liveSync: false, periodicReplication: false, syncOnStart: false, syncOnSave: false, syncOnFileOpen: false });
   });
   it("SYNC_MODE_LIVE is LiveSync mode", () => {
     expect(SYNC_MODE_LIVE).toMatchObject({ liveSync: true, periodicReplication: false, syncOnStart: true });
@@ -131,6 +146,12 @@ describe("answerModal (autopilot)", () => {
       expect(answerModal(m, role)).toBe(true);
       expect(m.log).toEqual(["click:Use this device's settings"]);
     }
+  });
+  it("device: after the hub was rebuilt ('Locked'), resets sync on this device (merge fetch); the hub never answers it", () => {
+    const m = modal("Locked", [], ["Reset Synchronisation on This Device", "Unlock the remote database", "Cancel for reconfirmation"]);
+    expect(answerModal(m, "device")).toBe(true);
+    expect(m.log).toEqual(["click:Reset Synchronisation on This Device"]);
+    expect(answerModal(modal("Locked", [], ["Reset Synchronisation on This Device"]), "hub")).toBe(false);
   });
   it("leaves unknown dialogs to the person", () => {
     const m = modal("Something new", [], ["Yes", "No"]);
