@@ -3,7 +3,7 @@ import { unzipSync, strFromU8 } from "fflate";
 import { backupNotes, type BackupFs } from "../src/backup";
 
 function memFs(files: Record<string, string>) {
-  const m = new Map(Object.entries(files).map(([k, v]) => [k, new TextEncoder().encode(v)]));
+  const m = new Map<string, Uint8Array>(Object.entries(files).map(([k, v]) => [k, new TextEncoder().encode(v)]));
   const fs: BackupFs & { m: typeof m } = {
     m,
     list: async () => [...m.keys()],
