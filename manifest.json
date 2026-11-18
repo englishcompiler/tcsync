@@ -1,9 +1,9 @@
 {
   "id": "tcsync",
   "name": "tcsync",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "minAppVersion": "1.5.0",
-  "description": "Sync Obsidian with Self-hosted LiveSync through a tailcat tunnel to CouchDB on your own computer — no VM, no open ports.",
+  "description": "Sync Obsidian between your devices through your own computer: one switch on the computer, one QR code per phone. End-to-end encrypted, no account, no cloud.",
   "author": "englishcompiler",
   "authorUrl": "https://github.com/englishcompiler",
   "isDesktopOnly": false

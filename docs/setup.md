@@ -1,4 +1,8 @@
-# tcsync: complete setup guide
+# tcsync: advanced setup — your own always-on server
+
+> **Most people don't need this page.** The normal setup — your computer is the hub, phones pair with a QR code, no terminal — is in the **[README](../README.md)**.
+>
+> This guide is for running a **separate, always-on CouchDB server** (a Raspberry Pi, a NAS, a VM or a Mac that never sleeps) so devices can sync even when no computer has Obsidian open. It uses the terminal. In tcsync's settings, choose **This device is… → Advanced: my own server**.
 
 This guide starts from nothing. By the end you will have:
 

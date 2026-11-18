@@ -1,6 +1,6 @@
 {
   "name": "tcsync",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "description": "Obsidian plugin: Self-hosted LiveSync over a tailcat tunnel",
   "license": "MIT",

@@ -27,3 +27,7 @@ Copyright (c) Tailscale Inc & contributors) and parts of Tailscale
 (https://github.com/tailscale/tailscale, BSD-3-Clause) compiled to WebAssembly.
 server/setup-uri.mjs is adapted from Self-hosted LiveSync
 (https://github.com/vrtmrz/obsidian-livesync, MIT, Copyright (c) vorotamoroz).
+main.js also bundles PouchDB (https://github.com/pouchdb/pouchdb, Apache-2.0),
+fflate (https://github.com/101arrowz/fflate, MIT), qrcode-generator
+(https://github.com/kazuhikoarase/qrcode-generator, MIT) and events
+(https://github.com/browserify/events, MIT).

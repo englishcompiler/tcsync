@@ -1,5 +1,61 @@
 # How tcsync works
 
+tcsync has two ways to run. **Hub mode** (the default, set up with one switch and QR codes) is described first; the **own-server mode** (CouchDB on an always-on machine) follows from "One sync request, step by step".
+
+## Hub mode
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant LS as LiveSync (phone)
+  participant TC as tcsync (phone)
+  participant DERP as DERP relay
+  participant L as tcsync hub: tailcat listener<br/>(WebAssembly, in Obsidian)
+  participant H as CouchDB-compatible handler<br/>(TypeScript)
+  participant DB as PouchDB in IndexedDB
+  participant LH as LiveSync (hub computer)
+
+  LS->>TC: fetch("http://couch.tailcat:5984/obsidian/_changes?feed=longpoll…")
+  TC->>DERP: WireGuard packets over a WebSocket
+  DERP->>L: forwards ciphertext
+  Note over L: device key paired by QR code?<br/>no → dropped silently
+  L->>H: HTTP request (+ the device's key)
+  H->>DB: db.changes(…) — waits for a change or 25 s
+  LH->>H: in-process: same handler, no network
+  H-->>L: CouchDB-shaped JSON (documents are E2EE ciphertext)
+  L-->>TC: encrypted reply via DERP
+  TC-->>LS: Response
+```
+
+- **The hub is Obsidian on one computer.** tcsync's WebAssembly bridge opens the *listening* end of a tailcat tunnel (`tailcat.Server.Listen`) and hands each HTTP request to a small CouchDB-compatible handler over PouchDB, stored in Obsidian's IndexedDB. The hub computer's own LiveSync uses the same handler in-process.
+- **Only the requests LiveSync makes are implemented:** database info/create/delete, documents (including `_local`), `_all_docs`, `_bulk_docs`, `_bulk_get`, `_revs_diff`, `_changes` (normal, longpoll, bounded continuous; `_selector`/`_doc_ids` filters; always with `pending`), `_find`, `_index`, `_compact`. Anything else is a CouchDB-style 404.
+- **Waiting is event-driven,** and the hub turns off Chromium's background throttling (Electron `setBackgroundThrottling(false)`): throttled timers in a minimised window would otherwise stall the tunnel. Optionally it blocks idle sleep / App Nap (`powerSaveBlocker`) while Obsidian is open.
+- **Pairing.** *Add a device* mints a tailcat device key **on the hub**, admits it, and shows `obsidian://tcsync?pair=…` as a QR code: hub address, that device key, the vault's LiveSync end-to-end passphrase and ID key, and a 10-minute expiry. An unused code's key is removed after 10 minutes. *Remove* restarts the listener without the key (tailcat can't un-admit at runtime; the address stays the same).
+- **LiveSync is configured for you.** tcsync applies the same settings LiveSync's own setup link would, then runs LiveSync's own initialisation (rebuild on the hub, fetch with "newer wins, keep local files" on a device) and answers its known dialogs. Unknown dialogs are left to the person. LiveSync's initialisation switches every sync trigger off, so tcsync turns live sync back on afterwards. Before a device's first fetch, tcsync zips its notes to `tcsync-backup-<date>.zip` (the newest 3 are kept).
+- **Self-repair.** If the hub's database is found empty although the hub was set up before (storage cleared), the hub rebuilds it from its own vault with the same secrets; devices catch up by themselves.
+
+### Hub-mode security
+
+| Who | Can see or do |
+|---|---|
+| The DERP relay operator | That two keys exchanged encrypted packets, when, and roughly how much. Not the content. |
+| Someone who learns the hub address | Nothing: only device keys added by QR code are admitted, and the allowlist is never empty (tailcat would admit everyone if it were). |
+| Someone who photographs a pairing QR code within its 10 minutes | Could pair as that device. It shows up in the hub's device list; **Remove** revokes it. |
+| Anyone with the hub's disk | The hub database holds only end-to-end-encrypted documents. The passphrase is in tcsync's plugin data on the hub and on each device (`.obsidian/plugins/tcsync/data.json`), which tcsync excludes from LiveSync's hidden-file sync. |
+
+### Hub-mode files
+
+| Item | Location |
+|---|---|
+| Hub identity, device list, vault secrets | `.obsidian/plugins/tcsync/data.json` on the hub (`hub`) |
+| Hub database | Obsidian's IndexedDB: `_pouch_tcsync-hub-obsidian`, `_pouch_tcsync-hub-meta` |
+| Device key, hub address | `.obsidian/plugins/tcsync/data.json` on each device |
+| Pre-pairing backups | `tcsync-backup-YYYYMMDD-HHmmss.zip` in each device's vault |
+
+---
+
+# Own-server mode
+
 ## One sync request, step by step
 
 ```mermaid
